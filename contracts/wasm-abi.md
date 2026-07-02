@@ -264,8 +264,21 @@ Signatures use wasm value types. `vp` = `validity_ptr` (`0`=all-valid). `dt` ∈
 | `nunique_dt_null` | `(i32 data,i32 vp,i32 len)->i32` |
 | `first_dt_null` `last_dt_null` | `(i32 data,i32 vp,i32 len,i32 out_valid)-> <dt>` (out_valid = 0 if all null) |
 
-Reductions must document their accumulation order so scalar and SIMD agree (e.g.
-pairwise or fixed-lane-count summation).
+**Kernel-level results for empty / all-null inputs** (the API layer maps these to
+`null` per `dtypes.md` §4.3 using `count_null` — kernels just return deterministically):
+`sum_*` → `0` (additive identity); `mean/std/var_*` → `NaN`; `min/max_f64/f32` → `NaN`;
+`min/max_i32/u32` → `0` (callers must consult `count_null`); `std/var` with fewer than
+2 non-null values → `NaN`. `nunique`: `NaN` counts as one distinct value (`dtypes.md`
+§4.6).
+
+**Prescribed accumulation order (both builds MUST implement it identically):**
+`sum`/`mean` over `f64` use **2 striped accumulators** (element `i` → accumulator
+`i & 1`), combined `acc0 + acc1` at the end; `f32` uses **4 striped accumulators**
+combined left-to-right. Null lanes contribute the additive identity. `std`/`var` are
+**two-pass** (striped mean, then striped sum of squared deviations, ddof=1). The scalar
+build simulates the same striping so both binaries return bit-identical results.
+Integer sums are order-insensitive (wrapping); min/max/count/nunique/first/last are
+order-insensitive by nature.
 
 **Agent C — selection** (`select*`):
 | Export | Signature |
@@ -274,21 +287,41 @@ pairwise or fixed-lane-count summation).
 | `filter_indices` | `(i32 mask,i32 out_idx,i32 len)->i32` (mask → `i32` row indices; returns count) |
 | `gather_dt` | `(i32 data,i32 idx,i32 idx_len,i32 out)->()` (take by index; `out[k]=data[idx[k]]`) |
 | `gather_validity` | `(i32 vp,i32 idx,i32 idx_len,i32 out_vp)->()` |
-| `argsort_dt` | `(i32 data,i32 vp,i32 out_perm,i32 len)->()` (stable; produces i32 permutation) |
-| `topk_dt` | `(i32 data,i32 vp,i32 k,i32 out_idx,i32 len)->i32` |
+| `argsort_dt` | `(i32 data,i32 vp,i32 inout_perm,i32 len,i32 desc)->()` (stable; `inout_perm` holds a caller-initialized permutation — identity for single-key — and is stably reordered by `data[perm[i]]`; multi-key = thread it last-key-first; ordering per `dtypes.md` §4.6) |
+| `topk_dt` | `(i32 data,i32 vp,i32 k,i32 out_idx,i32 len,i32 largest)->i32` (returns count written; semantics per `dtypes.md` §4.6) |
 
-**Agent D — relational / hash** (`hash*`, ADR-005):
+**Agent D — relational / hash** (`hash*`, ADR-005) — v1.1: signatures finalized by
+orchestrator; the hash *function* is Agent D's choice (documented in code), but null
+rows MUST hash to the reserved constant `H_NULL = 0x9e37_79b9_7f4a_7c15` so nulls form
+one group in `group_build` (`dtypes.md` §4.5: null keys group together, but never
+match in joins — join kernels use the validity bitmaps to exclude them):
 | Export | Signature |
 |---|---|
-| `hash_dt` | `(i32 data,i32 vp,i32 out_hash,i32 len)->()` (64-bit hashes → `i64[len]`) |
-| `hash_combine` | `(i32 acc_hash,i32 add_hash,i32 len)->()` (multi-key) |
-| `group_build` | `(i32 keys_hash,i32 len,i32 out_group_ids,i32 out_group_count_ptr)->()` (hash groupby: assigns dense group ids) |
-| `join_hash_inner` `join_hash_left` | build/probe over 64-bit key hashes → paired row-index arrays (exact out-param shape fixed when Agent D's brief is written) |
-| `unify_dict` | dictionary unification hook: remap one column's `i32` indices into a merged dictionary (exact shape fixed with Agent D's brief) |
+| `hash_dt` | `(i32 data,i32 vp,i32 out_hash,i32 len)->()` (64-bit hashes → `i64[len]`; null rows → `H_NULL`) |
+| `hash_combine` | `(i32 acc_hash,i32 add_hash,i32 len)->()` (multi-key; in-place into `acc_hash`) |
+| `group_build` | `(i32 hash_ptr,i32 len,i32 ht_ptr,i32 ht_cap,i32 out_group_ids)->i32` |
+| `join_hash_inner` | `(i32 lh_ptr,i32 l_vp,i32 l_len,i32 rh_ptr,i32 r_vp,i32 r_len,i32 ht_ptr,i32 ht_cap,i32 out_l_idx,i32 out_r_idx,i32 out_cap)->i32` |
+| `join_hash_left` | same as `join_hash_inner` |
 
-The precise out-param shapes for `join_*` and `unify_dict` are finalized in those
-agents' task briefs (they depend on the chosen probe layout); the naming, ABI style,
-buffer conventions, and no-alloc rule above are fixed now.
+- **Caller-provided hash-table scratch (keeps the §5.4 no-alloc rule):** `ht_ptr` is a
+  caller-allocated open-addressing table of `ht_cap` slots (`ht_cap` a power of two;
+  slot layout is Agent D's choice, ≤ 16 bytes/slot, zero-initialized by the caller).
+  If the table cannot hold the build side, the kernel returns **`-1`** and the caller
+  doubles `ht_cap` and re-calls (JS layer starts at `next_pow2(2 * build_len)` clamped
+  to a sane minimum).
+- **`group_build`:** assigns dense group ids in **order of first occurrence** (row 0's
+  key = group 0 — deterministic across builds; hash-order grouping is non-conformant).
+  Returns `group_count` (≥ 0) or `-1` (grow ht). `out_group_ids` is `i32[len]`.
+  Grouping compares 64-bit hashes only (ADR-005; collision risk accepted & documented).
+- **`join_*`:** builds on the **right** side, probes left rows in order. Returns the
+  total pair count `n` (or `-1` to grow ht); writes at most `out_cap` pairs — if
+  `n > out_cap` the caller re-allocates both out arrays to `n` and re-calls. Output
+  order: probe (left-row) order; duplicate right matches in build order.
+  `join_hash_left` emits `(l_idx, -1)` for unmatched/null-key left rows (the frame
+  layer turns `-1` into null gathers). Null-validity rows never match (§ above).
+- **`unify_dict`: dropped from the v1 wasm ABI.** Phase-1's JS-side dictionary
+  unification (`src/memory/dictionary.ts`) is the v1 path; revisit with a benchmark if
+  profiling shows it hot (would need an ADR note, not a reversal).
 
 ---
 
