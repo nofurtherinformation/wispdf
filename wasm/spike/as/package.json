@@ -1,0 +1,15 @@
+{
+  "name": "@dataframe/as-spike",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AssemblyScript kernel spike for ADR-007 language evaluation",
+  "scripts": {
+    "asbuild:scalar": "asc assembly/index.ts --target scalar",
+    "asbuild:simd": "asc assembly/index.ts --target simd",
+    "asbuild": "npm run asbuild:scalar && npm run asbuild:simd",
+    "bench": "node bench.mjs"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.27.34"
+  }
+}

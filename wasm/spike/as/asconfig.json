@@ -1,0 +1,27 @@
+{
+  "targets": {
+    "scalar": {
+      "entry": "assembly/scalar.ts",
+      "outFile": "build/scalar-pre.wasm",
+      "textFile": "build/scalar.wat",
+      "sourceMap": false,
+      "optimizeLevel": 3,
+      "shrinkLevel": 0,
+      "noAssert": true,
+      "runtime": "stub",
+      "exportRuntime": false
+    },
+    "simd": {
+      "entry": "assembly/simd.ts",
+      "outFile": "build/simd-pre.wasm",
+      "textFile": "build/simd.wat",
+      "sourceMap": false,
+      "optimizeLevel": 3,
+      "shrinkLevel": 0,
+      "noAssert": true,
+      "runtime": "stub",
+      "exportRuntime": false,
+      "enable": ["simd"]
+    }
+  }
+}

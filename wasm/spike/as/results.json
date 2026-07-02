@@ -1,0 +1,94 @@
+{
+  "results": [
+    {
+      "kernel": "add_f64",
+      "build": "scalar",
+      "rows": 1000000,
+      "ms_mean": 0.347,
+      "ops_per_sec": 2881266466
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "scalar",
+      "rows": 1000000,
+      "ms_mean": 0.228,
+      "ops_per_sec": 4391850248
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "scalar",
+      "rows": 1000000,
+      "ms_mean": 0.171,
+      "ops_per_sec": 5859942682
+    },
+    {
+      "kernel": "add_f64",
+      "build": "scalar",
+      "rows": 10000000,
+      "ms_mean": 3.487,
+      "ops_per_sec": 2867472641
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "scalar",
+      "rows": 10000000,
+      "ms_mean": 2.31,
+      "ops_per_sec": 4328863532
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "scalar",
+      "rows": 10000000,
+      "ms_mean": 1.66,
+      "ops_per_sec": 6023945424
+    },
+    {
+      "kernel": "add_f64",
+      "build": "simd",
+      "rows": 1000000,
+      "ms_mean": 0.219,
+      "ops_per_sec": 4573286458
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "simd",
+      "rows": 1000000,
+      "ms_mean": 0.27,
+      "ops_per_sec": 3699364030
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "simd",
+      "rows": 1000000,
+      "ms_mean": 0.214,
+      "ops_per_sec": 4670106771
+    },
+    {
+      "kernel": "add_f64",
+      "build": "simd",
+      "rows": 10000000,
+      "ms_mean": 2.171,
+      "ops_per_sec": 4606591412
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "simd",
+      "rows": 10000000,
+      "ms_mean": 2.603,
+      "ops_per_sec": 3841307102
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "simd",
+      "rows": 10000000,
+      "ms_mean": 2.118,
+      "ops_per_sec": 4721974397
+    }
+  ],
+  "sizes_gzip_bytes": {
+    "scalar": 500,
+    "simd": 582
+  },
+  "build_time_s": 1.33,
+  "timestamp": "2026-07-02T13:22:13.949Z"
+}

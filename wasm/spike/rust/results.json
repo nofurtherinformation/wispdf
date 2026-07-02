@@ -1,0 +1,105 @@
+{
+  "results": [
+    {
+      "kernel": "add_f64",
+      "build": "scalar",
+      "rows": 1000000,
+      "ops_per_sec": 3415060279,
+      "ms_mean": 0.293
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "scalar",
+      "rows": 1000000,
+      "ops_per_sec": 1901260688,
+      "ms_mean": 0.526
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "scalar",
+      "rows": 1000000,
+      "ops_per_sec": 319947959,
+      "ms_mean": 3.126
+    },
+    {
+      "kernel": "add_f64",
+      "build": "scalar",
+      "rows": 10000000,
+      "ops_per_sec": 3421464558,
+      "ms_mean": 2.923
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "scalar",
+      "rows": 10000000,
+      "ops_per_sec": 1941270058,
+      "ms_mean": 5.151
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "scalar",
+      "rows": 10000000,
+      "ops_per_sec": 316148884,
+      "ms_mean": 31.631
+    },
+    {
+      "kernel": "add_f64",
+      "build": "simd",
+      "rows": 1000000,
+      "ops_per_sec": 4749752182,
+      "ms_mean": 0.211
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "simd",
+      "rows": 1000000,
+      "ops_per_sec": 3000150608,
+      "ms_mean": 0.333
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "simd",
+      "rows": 1000000,
+      "ops_per_sec": 4253358984,
+      "ms_mean": 0.235
+    },
+    {
+      "kernel": "add_f64",
+      "build": "simd",
+      "rows": 10000000,
+      "ops_per_sec": 4665847406,
+      "ms_mean": 2.143
+    },
+    {
+      "kernel": "sum_f64_null",
+      "build": "simd",
+      "rows": 10000000,
+      "ops_per_sec": 3024566985,
+      "ms_mean": 3.306
+    },
+    {
+      "kernel": "cmp_gt_f64_mask",
+      "build": "simd",
+      "rows": 10000000,
+      "ops_per_sec": 4267774148,
+      "ms_mean": 2.343
+    }
+  ],
+  "sizes_gzip_bytes": {
+    "scalar": 668,
+    "simd": 908
+  },
+  "build_time_s": {
+    "scalar": 0.064,
+    "simd": 0.064
+  },
+  "meta": {
+    "node_version": "v22.23.1",
+    "date": "2026-07-02T13:24:11.363Z",
+    "warmup_runs": 3,
+    "measured_runs": {
+      "1000000": 10,
+      "10000000": 5
+    }
+  }
+}
