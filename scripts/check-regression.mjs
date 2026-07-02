@@ -132,6 +132,21 @@ async function main() {
   const node = process.version;
 
   if (UPDATE) {
+    // Guard: refuse to record a baseline from a dirty tree (P4.2 finding — an
+    // uncommitted hot-path edit would silently corrupt the baseline). --force overrides.
+    if (!process.argv.includes('--force')) {
+      const { execSync } = await import('node:child_process');
+      try {
+        const dirty = execSync("git status --porcelain -- . ':!bench/baselines'", {
+          cwd: join(__dir, '..'), encoding: 'utf8',
+        }).trim();
+        if (dirty) {
+          console.error('Refusing --update: working tree is dirty (commit first, or pass --force):');
+          console.error(dirty.split('\n').slice(0, 10).join('\n'));
+          process.exit(1);
+        }
+      } catch { /* no git available (e.g. bare container) — proceed */ }
+    }
     const baseline = {
       schema: 'wasm-v1',
       recorded: new Date().toISOString().slice(0, 10),
@@ -175,7 +190,10 @@ async function main() {
       continue;
     }
     const ratio = c / b.median_ms;
-    const ok = ratio <= 1 + THRESHOLD;
+    // ponytail: sub-ms ops are timer-noise-bound (P4.2 found withColumn_add_100k
+    // flaking at 1.11× on a 0.095ms baseline) — widen their tolerance to 25%.
+    const tol = b.median_ms < 1 ? 0.25 : THRESHOLD;
+    const ok = ratio <= 1 + tol;
     const status = ok ? 'OK' : 'FAIL';
     if (!ok) failures++;
     console.log(
