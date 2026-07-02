@@ -287,8 +287,17 @@ order-insensitive by nature.
 | `filter_indices` | `(i32 mask,i32 out_idx,i32 len)->i32` (mask → `i32` row indices; returns count) |
 | `gather_dt` | `(i32 data,i32 idx,i32 idx_len,i32 out)->()` (take by index; `out[k]=data[idx[k]]`) |
 | `gather_validity` | `(i32 vp,i32 idx,i32 idx_len,i32 out_vp)->()` |
-| `argsort_dt` | `(i32 data,i32 vp,i32 inout_perm,i32 len,i32 desc)->()` (stable; `inout_perm` holds a caller-initialized permutation — identity for single-key — and is stably reordered by `data[perm[i]]`; multi-key = thread it last-key-first; ordering per `dtypes.md` §4.6) |
+| `argsort_dt` | `(i32 data,i32 vp,i32 inout_perm,i32 len,i32 desc,i32 scratch_ptr)->()` (stable; `inout_perm` holds a caller-initialized permutation — identity for single-key — and is stably reordered by `data[perm[i]]`; multi-key = thread it last-key-first; ordering per `dtypes.md` §4.6; **v1.2:** `scratch_ptr` = caller-allocated, 16-byte-aligned `i32[len]` merge scratch — the JS dispatch layer allocates/frees it around the call) |
 | `topk_dt` | `(i32 data,i32 vp,i32 k,i32 out_idx,i32 len,i32 largest)->i32` (returns count written; semantics per `dtypes.md` §4.6) |
+
+**v1.2 amendments (orchestrator, post-P2 bench triage).** (1) `argsort_dt` gains
+`scratch_ptr` above: the no-alloc rotation-merge sort was correct but missed the §5
+bench gate by orders of magnitude; a caller-provided `i32[len]` scratch restores
+O(n log n) stable merge (or radix) without touching the §5.4 no-alloc rule. (2)
+`filter_indices` stays exported but the **JS dispatch layer uses a JS implementation**:
+investigation per §5 found V8's JIT beats wasm on this bitmap→index scatter loop
+(0.59×; `Math.clz32` lowers to native ctz and JS avoids the boundary). Callers go
+through `src/kernels/select/` and get the fast path automatically.
 
 **Agent D — relational / hash** (`hash*`, ADR-005) — v1.1: signatures finalized by
 orchestrator; the hash *function* is Agent D's choice (documented in code), but null
