@@ -1,4 +1,4 @@
-# Status Ledger (Phase 0 → Phase 1)
+# Status Ledger (Phase 0 → Phase 3)
 
 Maintained by the orchestrator (Fable). Subagents must not edit this file.
 
@@ -15,6 +15,9 @@ Last updated: 2026-07-02
 | dataframe-99s.5 | P0.4 ADR-007 decision + contracts (wasm-abi.md + dtypes.md) | Opus (LEAD) | done | fresh benches re-run + verified; `npm run gate` green | **ADR-007 = Rust** (accepted). `contracts/wasm-abi.md` v1 + `contracts/dtypes.md` v1 written. |
 | dataframe-39z.1 | P1.1 Rust arena allocator + wasm build infra + viewOf layer | Opus | done | `npm run gate` green (build+test+size); 29 tests | Bump+freelist arena (`alloc`/`free`/`realloc`/`mem_generation`), dual scalar/simd builds, SIMD-detect loader, single `viewOf` generation-counter accessor. `contracts/memory.d.ts` v0.9-draft. |
 | dataframe-39z.2 | P1.2 Columns, dict string store, dtype registry, zero-copy slice | Opus | done | `npm run gate` green (build+test+size); 50 tests | Dtype registry + Arrow validity bitmap + column create/toArray (typed fast + null-detecting slow path) + dict store (build/decode-memo/unify) + zero-copy slice (data byte-offset baked in `dataPtr`, validity bit-offset). `contracts/memory.d.ts` **v1 final**. |
+| (P2 bench triage) | ABI **v1.2** amendment: `argsort_dt` gains caller `scratch_ptr` (restores O(n log n) stable merge; no-scratch rotation-merge missed the §5 gate); `filter_indices` kept exported but JS dispatch wins (V8 ctz beats wasm). | Opus (LEAD) | done | commit 8319028 | Contract-only fix; kernel `scratch_ptr` landing separately. **NB:** the argsort binary in this worktree is still pre-amendment (arity-5) → `sortValues` is slow until the amended kernel merges. |
+| dataframe-9qm.1 | P3.1 Expression AST + compiler + fusion | Opus | done | `npm run gate` green; 719 tests (75 new) | `compile`/`compileFilter` over `FrameView`; compare→filter + elementwise-chain fusion verified by `ExecStats`; JS entry 13.56 KB gz. commit e1d27d9. |
+| dataframe-9qm.2 | P3.2 DataFrame/Series/GroupBy/join API + row proxy + errors + printer | Opus | done | `npm run gate` green (build+test+size); **768 tests (49 new)**; size OK | `src/frame/**` + public exports. E2E **pipeline 3.83× Arquero** (11.9 ms vs 45.5 ms @1M SIMD; gate ≥1×). join (inner) 1.73× Arquero. `sortValues` 0.02× — **blocked on the pre-v1.2 slow `argsort` kernel** (coded against the stable API with scratch-arity detection, inherits O(n log n) once it lands). JS entry 23.78 KB gz. Ref-counted buffer sharing + `dispose()`/`scope()`; frame leak test green. |
 
 ## Gate Definitions
 
