@@ -23,9 +23,12 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
-    "gate": "npm run build && npm run test && node scripts/check-size.mjs"
+    "gate": "npm run build && npm run test && node scripts/check-size.mjs",
+    "bench": "node bench/run.mjs"
   },
   "devDependencies": {
+    "arquero": "^8.0.3",
+    "danfojs": "^1.2.0",
     "fast-check": "^3.22.0",
     "tinybench": "^2.9.0",
     "tsup": "^8.3.0",
