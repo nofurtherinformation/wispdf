@@ -213,6 +213,9 @@ function isI32(s: string): boolean {
 
 function isF64(s: string): boolean {
   if (s.length === 0) return false;
+  // Whitespace-only strings coerce to 0 via Number(), but they are not numeric
+  // values — they should fall through to utf8 inference.
+  if (s.trim().length === 0) return false;
   const n = Number(s);
   return !isNaN(n);
 }

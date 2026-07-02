@@ -1,0 +1,13 @@
+{
+  "name": "skidi-node-quickstart",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Node.js quickstart for skidi — exercises the README quickstart against the built package.",
+  "scripts": {
+    "start": "node quickstart.mjs"
+  },
+  "dependencies": {
+    "skidi": "file:../.."
+  }
+}
