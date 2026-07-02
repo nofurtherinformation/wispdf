@@ -7,12 +7,6 @@
  *
  * Imports the built bundle (`dist/index.js`) — run `npm run build` first — and loads the
  * SIMD wasm from `wasm/dist` directly through the public `runtimeFromExports`/`useRuntime`.
- *
- * NOTE: `sortValues` is dominated by the `argsort_dt` wasm kernel. This worktree still
- * carries the pre-ABI-v1.2 no-scratch rotation-merge argsort (orders of magnitude slower,
- * flagged in wasm-abi.md §9). `sortValues` here is coded against the stable argsort API
- * with scratch-pointer arity detection, so it inherits the O(n log n) kernel automatically
- * once the amendment lands; the number below reflects the slow kernel, not the frame layer.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -76,7 +70,7 @@ async function main() {
       timeMs(() => aTable.join(rightTable, 'g').objects(), 2, 5),
     ],
     [
-      'sortValues (see NOTE: slow argsort kernel)',
+      'sortValues',
       timeMs(() => df.sortValues('a').dispose(), 0, 1),
       timeMs(() => aTable.orderby('a').objects(), 1, 3),
     ],
