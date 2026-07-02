@@ -3,27 +3,26 @@
 //!
 //! ## Exports
 //!
-//! | export              | signature                                              |
-//! |---------------------|--------------------------------------------------------|
-//! | `filter_dt`         | `(data, mask, out, len)->i32` (compacts, returns count)|
-//! | `filter_indices`    | `(mask, out_idx, len)->i32`                            |
-//! | `gather_dt`         | `(data, idx, idx_len, out)->()`                        |
-//! | `gather_validity`   | `(vp, idx, idx_len, out_vp)->()`                       |
-//! | `argsort_dt`        | `(data, vp, inout_perm, len, desc)->()`                |
-//! | `topk_dt`           | `(data, vp, k, out_idx, len, largest)->i32`            |
+//! | export              | signature                                                          |
+//! |---------------------|--------------------------------------------------------------------|
+//! | `filter_dt`         | `(data, mask, out, len)->i32` (compacts, returns count)            |
+//! | `filter_indices`    | `(mask, out_idx, len)->i32` (kept compiled; JS dispatch in index.ts)|
+//! | `gather_dt`         | `(data, idx, idx_len, out)->()`                                    |
+//! | `gather_validity`   | `(vp, idx, idx_len, out_vp)->()`                                   |
+//! | `argsort_dt`        | `(data, vp, inout_perm, len, desc, scratch_ptr)->()` (ABI v1.2)    |
+//! | `topk_dt`           | `(data, vp, k, out_idx, len, largest)->i32`                        |
 //!
 //! where `dt` ∈ {f64, f32, i32, u32, u8}.
 //!
-//! ## Sort algorithm (argsort)
+//! ## Sort algorithm (argsort) — ABI v1.2
 //!
-//! Bottom-up merge sort — stable, no allocation.
+//! Bottom-up stable merge sort using caller-provided scratch (ABI v1.2: the JS
+//! dispatch layer allocates/frees an `i32[len]` scratch buffer around each call).
 //!
 //! * Initial runs: insertion sort in blocks of `INIT_RUN = 16`.
-//! * Merge strategy: stack-local `[MaybeUninit<i32>; MERGE_BUF]` (MERGE_BUF = 1024,
-//!   4 KB) copy of the left half when `left_size ≤ MERGE_BUF`; rotation-based
-//!   in-place merge (O(n²) worst case, O(n) random-data average) for larger halves.
-//! * Complexity: O(n log n) for n ≤ 2 × MERGE_BUF = 2048; O(n log n) amortized
-//!   on random data; O(n log² n) worst case via the rotation fallback.
+//! * Merge: copy the left half into `scratch[0..size_l]`, merge back into `perm`.
+//!   `scratch` is always `len` elements, so the left half always fits — no rotation
+//!   fallback, true O(n log n) for all input sizes and orderings.
 //! * Both scalar and SIMD builds execute the same algorithm (comparisons are
 //!   inherently sequential; no SIMD benefit for sorting).
 //!
@@ -35,8 +34,6 @@
 
 #[cfg(target_feature = "simd128")]
 use core::arch::wasm32;
-
-use core::mem::MaybeUninit;
 
 // ── Bitmap helpers ────────────────────────────────────────────────────────────
 
@@ -296,25 +293,32 @@ pub unsafe extern "C" fn gather_validity(
     }
 }
 
-// ── argsort: stable sort engine ───────────────────────────────────────────────
+// ── argsort: stable sort engine (ABI v1.2 — caller-provided scratch) ─────────
 //
-// Bottom-up merge sort with stack-local scratch buffer. The sort is stable:
-// equal elements preserve their original relative order in `perm`.
+// Bottom-up merge sort using caller-provided `scratch` (`i32[len]`). The sort
+// is stable: equal elements preserve their original relative order in `perm`.
+//
+// ABI v1.2 change: the old implementation fell back to O(n²) rotation-based
+// in-place merge for left-halves > MERGE_BUF (1024). With a caller-provided
+// scratch of exactly `len` elements the left half always fits, giving true
+// O(n log n) for all input sizes and orderings.
 //
 // `cmp(a, b)` compares two perm VALUES (row indices). Returns `Less` if element
 // `a` should come before element `b` in the sorted output.
 
 const INIT_RUN: usize = 16;
-const MERGE_BUF: usize = 1024; // 4 KB stack scratch; covers left-halves ≤ 1024
 
-/// Stable in-place sort of `perm[0..len]` keyed by `cmp(perm[i], perm[j])`.
+/// Stable in-place sort of `perm[0..len]` keyed by `cmp`.
 ///
-/// Uses bottom-up merge sort. See module-level doc for complexity details.
+/// Uses bottom-up merge sort with caller-provided `scratch[0..len]` as merge
+/// workspace. O(n log n) for all input sizes; no rotation fallback.
 ///
 /// # Safety
-/// `perm` must point to at least `len` valid `i32` values.
-#[inline(never)] // Keep the 4 KB scratch buffer out of inlined call sites.
-unsafe fn stable_sort_perm<F>(perm: *mut i32, len: usize, cmp: F)
+/// `perm` and `scratch` must each point to at least `len` valid `i32` slots.
+/// `scratch` may alias nothing that the caller still holds a reference to during
+/// this call (it is write-only from the caller's perspective).
+#[inline(never)]
+unsafe fn stable_sort_perm_scratch<F>(perm: *mut i32, len: usize, scratch: *mut i32, cmp: F)
 where
     F: Fn(i32, i32) -> core::cmp::Ordering,
 {
@@ -325,28 +329,26 @@ where
     }
 
     // ── Phase 1: insertion sort initial runs ─────────────────────────────────
-    let mut lo = 0usize;
-    while lo < len {
-        let hi = (lo + INIT_RUN).min(len);
-        let mut i = lo + 1;
+    let mut run_lo = 0usize;
+    while run_lo < len {
+        let hi = (run_lo + INIT_RUN).min(len);
+        let mut i = run_lo + 1;
         while i < hi {
             let key = *perm.add(i);
             let mut j = i;
-            while j > lo && cmp(key, *perm.add(j - 1)) == Less {
+            while j > run_lo && cmp(key, *perm.add(j - 1)) == Less {
                 *perm.add(j) = *perm.add(j - 1);
                 j -= 1;
             }
             *perm.add(j) = key;
             i += 1;
         }
-        lo += INIT_RUN;
+        run_lo += INIT_RUN;
     }
 
     // ── Phase 2: bottom-up merge passes ──────────────────────────────────────
-    // Stack-local scratch buffer (uninit — we write before we read).
-    let mut buf: MaybeUninit<[i32; MERGE_BUF]> = MaybeUninit::uninit();
-    let buf_ptr = buf.as_mut_ptr().cast::<i32>();
-
+    // Copy the left half into scratch, then merge back into perm[lo..hi].
+    // scratch is len elements — left half is ≤ width ≤ len/2, always fits.
     let mut width = INIT_RUN;
     while width < len {
         let mut lo = 0usize;
@@ -355,74 +357,34 @@ where
             let hi = (lo + 2 * width).min(len);
             if mid < hi {
                 let size_l = mid - lo;
-                if size_l <= MERGE_BUF {
-                    // Buffer merge: copy left half to scratch, merge in place.
-                    core::ptr::copy_nonoverlapping(perm.add(lo), buf_ptr, size_l);
-                    let mut l = 0usize; // index into buf
-                    let mut r = mid; // index into perm (right half)
-                    let mut out = lo; // write position in perm
-                    while l < size_l && r < hi {
-                        let bl = *buf_ptr.add(l);
-                        let pr = *perm.add(r);
-                        // Stable: prefer left (buf) when equal.
-                        if cmp(pr, bl) == Less {
-                            *perm.add(out) = pr;
-                            r += 1;
-                        } else {
-                            *perm.add(out) = bl;
-                            l += 1;
-                        }
-                        out += 1;
-                    }
-                    // Flush remaining left elements (right tail is already in place).
-                    while l < size_l {
-                        *perm.add(out) = *buf_ptr.add(l);
+                // Copy left half into scratch.
+                core::ptr::copy_nonoverlapping(perm.add(lo), scratch, size_l);
+                let mut l = 0usize; // cursor into scratch (left half)
+                let mut r = mid;    // cursor into perm (right half)
+                let mut out = lo;   // write position in perm
+                while l < size_l && r < hi {
+                    let sl = *scratch.add(l);
+                    let pr = *perm.add(r);
+                    // Stable: prefer left (scratch) when equal.
+                    if cmp(pr, sl) == Less {
+                        *perm.add(out) = pr;
+                        r += 1;
+                    } else {
+                        *perm.add(out) = sl;
                         l += 1;
-                        out += 1;
                     }
-                } else {
-                    // Rotation-based in-place merge (fallback for large halves).
-                    // O(n²) worst case, O(n) on random data. Documented ceiling.
-                    inplace_merge_rotate(perm, lo, mid, hi, &cmp);
+                    out += 1;
+                }
+                // Flush remaining left elements (right tail is already in place).
+                while l < size_l {
+                    *perm.add(out) = *scratch.add(l);
+                    l += 1;
+                    out += 1;
                 }
             }
             lo += 2 * width;
         }
         width *= 2;
-    }
-}
-
-/// In-place stable merge of `perm[lo..mid]` and `perm[mid..hi]` using rotations.
-///
-/// Each "wrong" right element is rotated to its correct position via a single
-/// `rotate_right(1)` (O(r-l) elements moved). Worst case: O(n²) total moves
-/// (reverse-sorted input). Average on random data: O(n).
-#[inline(never)]
-unsafe fn inplace_merge_rotate<F>(
-    perm: *mut i32,
-    lo: usize,
-    mid: usize,
-    hi: usize,
-    cmp: &F,
-) where
-    F: Fn(i32, i32) -> core::cmp::Ordering,
-{
-    use core::cmp::Ordering::Less;
-    let mut l = lo;
-    let mut r = mid;
-    while l < r && r < hi {
-        let lv = *perm.add(l);
-        let rv = *perm.add(r);
-        if cmp(rv, lv) == Less {
-            // rv belongs before lv: rotate rv to position l.
-            let span = r - l + 1;
-            core::slice::from_raw_parts_mut(perm.add(l), span).rotate_right(1);
-            // After rotate: rv is at l; lv..r are shifted right by 1.
-            l += 1;
-            r += 1;
-        } else {
-            l += 1;
-        }
     }
 }
 
@@ -565,7 +527,7 @@ unsafe fn argsort_cmp_u32(
     }
 }
 
-// ── argsort exports ───────────────────────────────────────────────────────────
+// ── argsort exports (ABI v1.2) ────────────────────────────────────────────────
 
 /// Stable sort of `inout_perm[0..len]` by `data[perm[i]]`.
 ///
@@ -573,6 +535,10 @@ unsafe fn argsort_cmp_u32(
 /// result for multi-key threading). `desc = 0` ascending, `1` descending.
 /// Nulls sort last in both directions (dtypes.md §4.6). NaN sorts after +inf
 /// ascending, first descending (as the "largest" value).
+///
+/// `scratch_ptr` (ABI v1.2): caller-allocated, 16-byte-aligned `i32[len]` merge
+/// scratch. The JS dispatch layer (`src/kernels/select/index.ts`) allocates and
+/// frees it around this call so the kernel itself never allocates.
 #[no_mangle]
 pub unsafe extern "C" fn argsort_f64(
     data_ptr: *const f64,
@@ -580,13 +546,16 @@ pub unsafe extern "C" fn argsort_f64(
     inout_perm: *mut i32,
     len: u32,
     desc: i32,
+    scratch_ptr: *mut i32,
 ) {
     let n = len as usize;
     if n <= 1 {
         return;
     }
     let d = desc != 0;
-    stable_sort_perm(inout_perm, n, |a, b| argsort_cmp_f64(data_ptr, vp, d, a, b));
+    stable_sort_perm_scratch(inout_perm, n, scratch_ptr, |a, b| {
+        argsort_cmp_f64(data_ptr, vp, d, a, b)
+    });
 }
 
 #[no_mangle]
@@ -596,13 +565,16 @@ pub unsafe extern "C" fn argsort_f32(
     inout_perm: *mut i32,
     len: u32,
     desc: i32,
+    scratch_ptr: *mut i32,
 ) {
     let n = len as usize;
     if n <= 1 {
         return;
     }
     let d = desc != 0;
-    stable_sort_perm(inout_perm, n, |a, b| argsort_cmp_f32(data_ptr, vp, d, a, b));
+    stable_sort_perm_scratch(inout_perm, n, scratch_ptr, |a, b| {
+        argsort_cmp_f32(data_ptr, vp, d, a, b)
+    });
 }
 
 #[no_mangle]
@@ -612,13 +584,16 @@ pub unsafe extern "C" fn argsort_i32(
     inout_perm: *mut i32,
     len: u32,
     desc: i32,
+    scratch_ptr: *mut i32,
 ) {
     let n = len as usize;
     if n <= 1 {
         return;
     }
     let d = desc != 0;
-    stable_sort_perm(inout_perm, n, |a, b| argsort_cmp_i32(data_ptr, vp, d, a, b));
+    stable_sort_perm_scratch(inout_perm, n, scratch_ptr, |a, b| {
+        argsort_cmp_i32(data_ptr, vp, d, a, b)
+    });
 }
 
 #[no_mangle]
@@ -628,13 +603,16 @@ pub unsafe extern "C" fn argsort_u32(
     inout_perm: *mut i32,
     len: u32,
     desc: i32,
+    scratch_ptr: *mut i32,
 ) {
     let n = len as usize;
     if n <= 1 {
         return;
     }
     let d = desc != 0;
-    stable_sort_perm(inout_perm, n, |a, b| argsort_cmp_u32(data_ptr, vp, d, a, b));
+    stable_sort_perm_scratch(inout_perm, n, scratch_ptr, |a, b| {
+        argsort_cmp_u32(data_ptr, vp, d, a, b)
+    });
 }
 
 // ── topk: heap-based k-selection ─────────────────────────────────────────────

@@ -42,11 +42,11 @@ interface SelectWasm {
   gather_u32(data: number, idx: number, idx_len: number, out: number): void;
   gather_u8(data: number, idx: number, idx_len: number, out: number): void;
   gather_validity(vp: number, idx: number, idx_len: number, out_vp: number): void;
-  // argsort
-  argsort_f64(data: number, vp: number, inout_perm: number, len: number, desc: number): void;
-  argsort_f32(data: number, vp: number, inout_perm: number, len: number, desc: number): void;
-  argsort_i32(data: number, vp: number, inout_perm: number, len: number, desc: number): void;
-  argsort_u32(data: number, vp: number, inout_perm: number, len: number, desc: number): void;
+  // argsort — ABI v1.2: (data, vp, inout_perm, len, desc, scratch_ptr)
+  argsort_f64(data: number, vp: number, inout_perm: number, len: number, desc: number, scratch_ptr: number): void;
+  argsort_f32(data: number, vp: number, inout_perm: number, len: number, desc: number, scratch_ptr: number): void;
+  argsort_i32(data: number, vp: number, inout_perm: number, len: number, desc: number, scratch_ptr: number): void;
+  argsort_u32(data: number, vp: number, inout_perm: number, len: number, desc: number, scratch_ptr: number): void;
   // topk
   topk_f64(data: number, vp: number, k: number, out_idx: number, len: number, largest: number): number;
   topk_f32(data: number, vp: number, k: number, out_idx: number, len: number, largest: number): number;
@@ -345,7 +345,7 @@ function runCase(mod: SelectWasm, c: FixtureCase): void {
       expect(outBits, `${c.name}: out_vp`).toEqual(xp.out_vp);
 
     } else if (exp.startsWith('argsort_')) {
-      // argsort_dt: (data, vp, inout_perm, len, desc) -> ()
+      // argsort_dt: (data, vp, inout_perm, len, desc, scratch_ptr) -> ()  [ABI v1.2]
       const inp = c.inputs as ArgsortInputs;
       const xp = c.expected as ArgsortExpected;
       const dt = dtypeOf(exp);
@@ -353,12 +353,14 @@ function runCase(mod: SelectWasm, c: FixtureCase): void {
       const Ctor = arrayCtorFor(dt);
       const len = inp.data.length;
 
-      const dataPtr = a(packNums(mod, inp.data, Ctor, bpe));
-      const vpPtr   = inp.vp ? a(packBitmap(mod, inp.vp, len)) : 0;
-      const permPtr = a(packNums(mod, inp.inout_perm, Int32Array, 4));
+      const dataPtr    = a(packNums(mod, inp.data, Ctor, bpe));
+      const vpPtr      = inp.vp ? a(packBitmap(mod, inp.vp, len)) : 0;
+      const permPtr    = a(packNums(mod, inp.inout_perm, Int32Array, 4));
+      // Allocate scratch (i32[len]) required by ABI v1.2
+      const scratchPtr = a(allocN(mod, Math.max(len, 1), 4));
 
       const fn = (mod as unknown as Record<string, Function>)[exp] as (...args: number[]) => void;
-      fn(dataPtr, vpPtr, permPtr, len, inp.desc);
+      fn(dataPtr, vpPtr, permPtr, len, inp.desc, scratchPtr);
 
       const perm = new Int32Array(mod.memory.buffer, permPtr, len);
       for (let i = 0; i < xp.inout_perm.length; i++) {
