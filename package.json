@@ -21,7 +21,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build:wasm": "bash wasm/rust/build.sh",
+    "build:js": "tsup",
+    "build": "npm run build:wasm && npm run build:js && node scripts/copy-wasm.mjs",
     "test": "vitest run",
     "gate": "npm run build && npm run test && node scripts/check-size.mjs",
     "bench": "node bench/run.mjs"

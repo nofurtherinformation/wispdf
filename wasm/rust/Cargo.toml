@@ -1,0 +1,21 @@
+[package]
+name = "dataframe-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Columnar dataframe WASM core: arena allocator + kernels (Phase 1 = allocator only)."
+license = "MIT"
+publish = false
+
+[lib]
+name = "dataframe_wasm"
+crate-type = ["cdylib"]
+
+# Size + speed discipline per wasm-abi.md §1 (ADR-007):
+# no_std, panic=abort, no unwinding, single codegen unit, LTO, strip.
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
+overflow-checks = false

@@ -1,7 +1,9 @@
 /**
  * dataframe — columnar WASM dataframe library
- * Phase 0 scaffold: hello-world export only.
  */
+
+// Phase 1 — memory core: wasm loader, arena allocator, viewOf() layer.
+export * from './memory/index.js';
 
 export const VERSION = '0.0.1';
 
