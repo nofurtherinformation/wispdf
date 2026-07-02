@@ -1,0 +1,45 @@
+{
+  "schema": "wasm-v1",
+  "recorded": "2026-07-02",
+  "note": "SIMD build medians (ms). Gate checks 100K ops with ≤10% regression tolerance.",
+  "node": "v22.23.1",
+  "gate_ops": [
+    "pipeline_100k",
+    "join_100k",
+    "sortValues_100k",
+    "withColumn_add_100k",
+    "groupby_sum_100k"
+  ],
+  "ops": {
+    "pipeline_100k": {
+      "median_ms": 8.034
+    },
+    "join_100k": {
+      "median_ms": 9.0587
+    },
+    "sortValues_100k": {
+      "median_ms": 7.3206
+    },
+    "withColumn_add_100k": {
+      "median_ms": 0.0953
+    },
+    "groupby_sum_100k": {
+      "median_ms": 2.3834
+    },
+    "pipeline_1m": {
+      "median_ms": 12.5867
+    },
+    "join_1m": {
+      "median_ms": 72.8763
+    },
+    "sortValues_1m": {
+      "median_ms": 93.1592
+    },
+    "withColumn_add_1m": {
+      "median_ms": 0.184
+    },
+    "groupby_sum_1m": {
+      "median_ms": 5.8985
+    }
+  }
+}
