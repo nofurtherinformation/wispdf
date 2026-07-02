@@ -149,6 +149,7 @@ unsafe fn ensure_capacity(end: usize) -> bool {
     if (end as u64) <= current_bytes {
         return true;
     }
+    #[allow(clippy::manual_div_ceil)]
     let needed_pages = (((end as u64) - current_bytes + (PAGE as u64) - 1) / (PAGE as u64)) as usize;
     if wasm_memory_grow(needed_pages) == usize::MAX {
         return false; // OOM — do not advance any state
