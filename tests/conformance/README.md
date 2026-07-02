@@ -3,9 +3,10 @@
 **Status:** orchestrator-owned, read-only to kernel agents.
 
 These JSON fixtures are the acceptance tests for every Phase-2 kernel export (ABI §9).
-A kernel agent passes conformance when every non-BLOCKED case in the relevant fixture file
-produces byte-identical output to the `expected` values below.  BLOCKED cases mark spots
-where the ABI is silent; the orchestrator will fill them in before or during verification.
+A kernel agent passes conformance when every case in the relevant fixture file
+produces byte-identical output to the `expected` values below.  All previously-BLOCKED
+cases have been filled per contracts v1.1 (commit 954efc8 + this update); the BLOCKED gap
+table (§6) is now empty.
 
 ---
 
@@ -28,19 +29,7 @@ A case:
   "name":    "<snake_case_id>",    // unique within the file
   "note":    "optional prose",
   "inputs":  { ... },
-  "expected": { ... }             // absent when "blocked": true
-}
-```
-
-A BLOCKED case (ABI gap; do NOT implement around):
-
-```jsonc
-{
-  "export":  "<kernel_name>",
-  "name":    "BLOCKED__<reason>",
-  "blocked": true,
-  "blocked_reason": "...",
-  "inputs":  { ... }
+  "expected": { ... }
 }
 ```
 
@@ -131,23 +120,63 @@ check it equals `expected.group_count`; then verify the partition structure of
 implementation-defined (hash-table order). Sort each group's index list and sort
 the groups themselves before comparing.
 
+### Join cases (`join_hash_inner`, `join_hash_left`)
+
+The fixture supplies the pre-computed hash arrays (`lh`, `rh` as i64 decimal string
+arrays) and validity bitmaps (`l_vp`, `r_vp`).  The runner is responsible for:
+
+- Sizing `ht_ptr`/`ht_cap` (start at `next_pow2(2 * build_len)`, minimum 4 slots,
+  zero-initialized).
+- Sizing `out_l_idx`/`out_r_idx`/`out_cap` (start at `build_len + probe_len`).
+- Implementing the **-1 grow-and-retry protocol**: if the kernel returns `-1`, double
+  `ht_cap`, re-zero and re-call; if it returns `n > out_cap`, reallocate out arrays
+  to `n` and re-call.
+
+`expected.pairs` is an ordered list of `[l_idx, r_idx]` pairs in probe (left-row) order;
+duplicate right matches are in build (right-row) order.  The runner verifies the full
+pair list in order.
+
+`join_hash_left` emits `[l_idx, -1]` for unmatched left rows **and** for null-validity
+left rows (vp=0).  The frame layer maps `-1` right indices to null-gather operations.
+
+`H_NULL = 0x9e3779b97f4a7c15` (signed i64: `-7046029254386353131`) is the reserved
+null-row hash emitted by `hash_dt` for null-validity rows.  Join fixtures use `"0"` as
+a placeholder hash value for null rows since the validity bit (vp=0) governs matching,
+not the hash value.
+
 ---
 
-## 4. Accumulation-order-sensitive cases
+## 4. Accumulation order — PRESCRIBED (not implementation-chosen)
 
-Floating-point reductions are not associative.  Cases tagged with
-`"accumulation_order": "left_to_right"` specify the expected value for naive sequential
-summation (accumulate left-to-right starting from the identity element).  An
-implementation that documents a different accumulation strategy (e.g. pairwise) may
-produce a different result; the conformance verifier accepts this ONLY IF the
-implementation's stated strategy matches its actual output AND scalar and SIMD produce
-the same value.
+Floating-point reductions are not associative. The ABI prescribes specific accumulation
+strategies so that scalar and SIMD builds return **bit-identical** results:
+
+- **`f64` sum/mean:** 2 striped accumulators — element `i` goes to accumulator `i & 1`;
+  combined as `acc0 + acc1` at the end.  Example: `[1e16, 1.0, -1e16]` →
+  `acc0 = 1e16 + (-1e16) = 0.0`, `acc1 = 1.0` → result `1.0` (not `0.0`; the naive
+  left-to-right result `0.0` does NOT conform).
+
+- **`f32` sum/mean:** 4 striped accumulators — element `i` goes to accumulator `i & 3`;
+  combined left-to-right in f32: `((acc0 + acc1) + acc2) + acc3`.  Example:
+  `[1e8, 1.0, -1e8, 1.0, 1e8, 1.0, -1e8, 1.0]` → result `2.0` (not `1.0`; the naive
+  left-to-right result `1.0` does NOT conform).
+
+- **`std`/`var`:** two-pass — striped mean (same strategy per dtype), then striped sum
+  of squared deviations, ddof=1.
+
+Null lanes contribute the additive identity (0) to their accumulator slot (i.e. they
+are skipped without breaking stripe alignment; the valid-element loop simply does not
+add their contribution).
+
+The conformance verifier uses **bit-pattern comparison** (`Object.is`) on float results.
+An implementation that deviates from the prescribed strategy will fail the
+`sum_f64_null__accumulation_order_sensitive` and `sum_f32_null__striping_sensitive` cases.
 
 ---
 
 ## 5. Coverage requirements (kernel agents must not delete or weaken any case)
 
-Every non-BLOCKED export has, at minimum:
+Every non-blocked export has, at minimum:
 
 - `len=0` (empty, a valid no-op)
 - `len=1`
@@ -162,19 +191,30 @@ Every non-BLOCKED export has, at minimum:
 - Full 9-row Kleene truth table for `and_kleene`/`or_kleene`
 - Stable-sort case for `argsort` (equal keys preserve original order)
 - Mask-padding case for `filter`/`gather` (len=9 so the second bitmap byte has padding)
+- Multi-key threading case for `argsort` (two sequential calls threading `inout_perm`)
+- desc-with-nulls case for `argsort` (nulls still last in descending)
 
 ---
 
-## 6. BLOCKED cases (ABI gaps to resolve before verification)
+## 6. BLOCKED cases (ABI gaps)
 
-The following semantics are not fully specified in `dtypes.md` or `wasm-abi.md`.
-The orchestrator must resolve them before these cases can be enabled.
+**All BLOCKED cases have been resolved.** The table below is empty.
 
-| kernel(s)                                       | gap |
-|-------------------------------------------------|-----|
-| `min_dt_null`, `max_dt_null`                    | Null return when all-null: ABI §9 signature has no `out_valid` pointer. For integer dtypes there is no sentinel value for null. dtypes.md says result is null; signature is `(data,vp,len) -> <dt>` with no way to signal null. Does an `out_valid i32 ptr` need to be added? |
-| `mean_dt_null`, `std_dt_null`, `var_dt_null`    | Same issue: null result (all-null for mean, <2 non-null for std/var) has no signaling mechanism in the ABI signature. |
-| `argsort_dt`                                    | Null ordering: dtypes.md §4 does not state whether null values sort before or after non-null values. |
-| `topk_dt`                                       | Sort direction: ABI §9 says "top-k" but does not specify largest vs smallest. |
-| `join_hash_inner`, `join_hash_left`             | Out-param shape explicitly deferred to Agent D's brief (ABI §9 note). |
-| `unify_dict`                                    | Out-param shape explicitly deferred to Agent D's brief (ABI §9 note). |
+| kernel(s) | gap |
+|-----------|-----|
+| *(none)*  |     |
+
+### Resolution summary (contracts v1.1, commit 954efc8)
+
+| Previously blocked | Resolution |
+|--------------------|------------|
+| `min/max_dt_null` empty/all-null | wasm-abi.md §9: float dtypes → `NaN`; i32/u32 → `0`. Callers use `count_null` to distinguish. |
+| `mean/std/var_dt_null` empty/all-null | wasm-abi.md §9: → `NaN`. |
+| `std/var_dt_null` fewer than 2 non-null | wasm-abi.md §9: → `NaN`. |
+| `nunique_f64_null` NaN counts | dtypes.md §4.6: NaN counts as **one** distinct value. |
+| `argsort_dt` null ordering | dtypes.md §4.6: nulls last both directions; NaN after +inf ascending / first descending; stability guaranteed. |
+| `argsort_dt` signature | wasm-abi.md §9 C: `inout_perm` caller-initialized identity; `desc` param. |
+| `topk_dt` direction / signature | dtypes.md §4.6 + wasm-abi.md §9 C: `largest` param; NaN participates as largest. |
+| `join_hash_inner/left` out-param shape | wasm-abi.md §9 D: finalized; semantic fixtures added; runner owns ht/out sizing + retry. |
+| `unify_dict` | **Dropped from v1 ABI.** JS-side unification (`src/memory/dictionary.ts`) is the v1 path. |
+| `sum_f64_null` accumulation order | **Prescribed** 2-striped (not implementation-chosen); expected value updated to `1.0`. |

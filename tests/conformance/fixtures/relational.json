@@ -1,6 +1,6 @@
 {
   "family": "relational",
-  "description": "Agent D — relational/hash kernels per ABI §9. hash_dt and hash_combine use property tests (exact hash values are implementation-defined per ABI). join_hash_inner, join_hash_left, and unify_dict are BLOCKED (out-param shapes deferred to Agent D's brief). Null-key join semantics: null never matches null (SQL equijoin).",
+  "description": "Agent D — relational/hash kernels per ABI §9. hash_dt and hash_combine use property tests (exact hash values are implementation-defined per ABI). join_hash_inner and join_hash_left use semantic fixtures: inputs are left/right 64-bit hash arrays (decimal strings) plus optional validity bit arrays; expected.pairs lists [l_idx, r_idx] in probe (left-row) order with duplicate right matches in build order. The runner owns ht_ptr/ht_cap/out_cap sizing and the -1-grow-and-retry protocol (see README §join). Null-validity rows (vp=0) never match even when both hash to H_NULL=0x9e3779b97f4a7c15. join_hash_left emits [l_idx,-1] for unmatched AND null-key left rows. unify_dict is DROPPED from v1 ABI; JS-side dictionary unification (src/memory/dictionary.ts) is the v1 path.",
   "cases": [
 
     { "export": "hash_i32", "name": "hash_i32__equal_values_equal_hashes",
@@ -154,19 +154,76 @@
       }
     },
 
-    { "export": "join_hash_inner", "name": "BLOCKED__join_hash_inner__out_param_shape",
-      "blocked": true,
-      "blocked_reason": "ABI §9 explicitly defers the out-param shape of join_hash_inner to Agent D's task brief: 'build/probe over 64-bit key hashes → paired row-index arrays (exact out-param shape fixed when Agent D brief is written)'. Cannot write fixtures until the signature is finalized. When resolved, inner join fixtures must cover: basic match, no matches (empty result), multiple matches for same key, null key never matches (dtypes.md §4.5), and len=0." },
-    { "export": "join_hash_inner", "name": "BLOCKED__null_key_never_matches",
-      "blocked": true,
-      "blocked_reason": "dtypes.md §4.5 states: 'Join on a null key does not match (null != null for equijoin), consistent with SQL.' This must be verified by the inner join fixture once the signature is known. A left-side null key produces no output row in inner join; a right-side null key produces no match either." },
+    { "export": "join_hash_inner", "name": "join_hash_inner__basic",
+      "note": "Build on right side, probe left rows in order. left=[100,200,300], right=[200,100,200]. l[0]=100 matches r[1]; l[1]=200 matches r[0] then r[2] (build order); l[2]=300 no match → no output row for inner join.",
+      "inputs": {
+        "lh": ["100", "200", "300"], "l_vp": [1, 1, 1],
+        "rh": ["200", "100", "200"], "r_vp": [1, 1, 1]
+      },
+      "expected": { "pairs": [[0, 1], [1, 0], [1, 2]] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__no_match",
+      "note": "No hash value in left appears in right → empty result.",
+      "inputs": {
+        "lh": ["100"], "l_vp": [1],
+        "rh": ["200"], "r_vp": [1]
+      },
+      "expected": { "pairs": [] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__empty",
+      "inputs": {
+        "lh": [], "l_vp": [],
+        "rh": [], "r_vp": []
+      },
+      "expected": { "pairs": [] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__null_never_matches",
+      "note": "Null-validity rows (vp=0) never match even when hash values are identical (dtypes.md §4.5: 'null != null for equijoin'). l[0]=100 valid matches r[0]=100 valid. l[1] has vp=0 → no match output. r[1] has vp=0 → cannot be matched.",
+      "inputs": {
+        "lh": ["100", "0"], "l_vp": [1, 0],
+        "rh": ["100", "0"], "r_vp": [1, 0]
+      },
+      "expected": { "pairs": [[0, 0]] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__duplicate_right_matches",
+      "note": "One left row matches multiple right rows; duplicates emitted in build (right) order.",
+      "inputs": {
+        "lh": ["200"], "l_vp": [1],
+        "rh": ["100", "200", "200"], "r_vp": [1, 1, 1]
+      },
+      "expected": { "pairs": [[0, 1], [0, 2]] }
+    },
 
-    { "export": "join_hash_left", "name": "BLOCKED__join_hash_left__out_param_shape",
-      "blocked": true,
-      "blocked_reason": "Same as join_hash_inner: out-param shape deferred to Agent D's brief. When resolved, left join fixtures must additionally cover: left row with no right match → output row with right-side indices = -1 (or sentinel per the finalized spec), and null key on left → no match on right (null != null), producing a null-fill row. dtypes.md §4.5 specifies null-key-does-not-match; confirm it applies to left join." },
-
-    { "export": "unify_dict", "name": "BLOCKED__unify_dict__out_param_shape",
-      "blocked": true,
-      "blocked_reason": "ABI §9 explicitly defers the unify_dict signature to Agent D's brief: 'exact shape fixed with Agent D brief'. Cannot write fixtures. When resolved, fixtures must cover: two disjoint dictionaries, two overlapping dictionaries, one empty dictionary, and verify that indices in the remapped column correctly map to the merged dictionary strings." }
+    { "export": "join_hash_left", "name": "join_hash_left__basic",
+      "note": "Left join: unmatched left rows emit [l_idx, -1]. l[0]=100 no match → [0,-1]; l[1]=200 matches r[0] → [1,0]; l[2]=300 no match → [2,-1].",
+      "inputs": {
+        "lh": ["100", "200", "300"], "l_vp": [1, 1, 1],
+        "rh": ["200"], "r_vp": [1]
+      },
+      "expected": { "pairs": [[0, -1], [1, 0], [2, -1]] }
+    },
+    { "export": "join_hash_left", "name": "join_hash_left__null_key_left",
+      "note": "Null-key left rows (vp=0) emit [l_idx,-1] per wasm-abi.md §9 ('join_hash_left emits (l_idx,-1) for unmatched/null-key left rows'). l[0]=100 valid matches r[0] → [0,0]; l[1] null → [1,-1]; l[2]=200 no match → [2,-1].",
+      "inputs": {
+        "lh": ["100", "0", "200"], "l_vp": [1, 0, 1],
+        "rh": ["100"], "r_vp": [1]
+      },
+      "expected": { "pairs": [[0, 0], [1, -1], [2, -1]] }
+    },
+    { "export": "join_hash_left", "name": "join_hash_left__empty",
+      "inputs": {
+        "lh": [], "l_vp": [],
+        "rh": [], "r_vp": []
+      },
+      "expected": { "pairs": [] }
+    },
+    { "export": "join_hash_left", "name": "join_hash_left__all_matched",
+      "note": "All left rows match; no -1 entries emitted.",
+      "inputs": {
+        "lh": ["100", "200"], "l_vp": [1, 1],
+        "rh": ["200", "100"], "r_vp": [1, 1]
+      },
+      "expected": { "pairs": [[0, 1], [1, 0]] }
+    }
   ]
 }
