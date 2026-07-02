@@ -170,6 +170,24 @@ Nulls are skipped; over the **non-null** subset:
   are not dropped from `groupby` (only `filter` drops them). Join on a null key does
   **not** match (null ≠ null for equijoin), consistent with SQL.
 
+### 4.6 Ordering — `argsort` / `topk` (v1.1 addendum, orchestrator)
+
+- **Total order per dtype (ascending):** numeric order (signed `i32`, unsigned `u32`,
+  IEEE for floats) over valid values, with **`NaN` after `+inf`** (all NaN bit patterns
+  compare equal to each other), and **null after everything** (nulls sort **last**).
+- **Descending (`desc=1`)** reverses the *value* total order (so `NaN` comes first,
+  being the largest value) — **nulls still sort last** in both directions
+  (pandas `na_position='last'`).
+- **Stability:** equal keys — including NaN ties and null ties — preserve original row
+  order, in both directions.
+- **Multi-key sort** = repeated stable single-key argsort from **last key to first**,
+  threading the permutation through the `inout_perm` parameter (`wasm-abi.md` §9 C).
+- **`topk`:** indices of the `k` extreme **valid** values under the same total order
+  (nulls excluded; `NaN` participates as the largest value). `largest=1` → k largest,
+  output ordered descending; `largest=0` → k smallest, ascending. Ties: lower original
+  index first. Writes `min(k, non-null count)` indices.
+- **`nunique`:** `NaN` counts as **one** distinct value; nulls are not counted (§4.3).
+
 ---
 
 ## 5. Quick reference for the expression compiler (Phase 3)

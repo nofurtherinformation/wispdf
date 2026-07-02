@@ -1,0 +1,229 @@
+{
+  "family": "relational",
+  "description": "Agent D — relational/hash kernels per ABI §9. hash_dt and hash_combine use property tests (exact hash values are implementation-defined per ABI). join_hash_inner and join_hash_left use semantic fixtures: inputs are left/right 64-bit hash arrays (decimal strings) plus optional validity bit arrays; expected.pairs lists [l_idx, r_idx] in probe (left-row) order with duplicate right matches in build order. The runner owns ht_ptr/ht_cap/out_cap sizing and the -1-grow-and-retry protocol (see README §join). Null-validity rows (vp=0) never match even when both hash to H_NULL=0x9e3779b97f4a7c15. join_hash_left emits [l_idx,-1] for unmatched AND null-key left rows. unify_dict is DROPPED from v1 ABI; JS-side dictionary unification (src/memory/dictionary.ts) is the v1 path.",
+  "cases": [
+
+    { "export": "hash_i32", "name": "hash_i32__equal_values_equal_hashes",
+      "note": "PROPERTY TEST: equal inputs must produce equal i64 hashes. The runner checks that positions in each group of 'equal_groups' have identical hash output values. It also checks positions in different groups have different hashes (collisions in test data would be a bug in the fixture, not the kernel).",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": {
+        "data": [1, 2, 1, 3, 2],
+        "vp": [1, 1, 1, 1, 1]
+      },
+      "expected": {
+        "equal_groups": [[0, 2], [1, 4], [3]]
+      }
+    },
+    { "export": "hash_i32", "name": "hash_i32__null_values_equal_hash",
+      "note": "PROPERTY TEST: null positions (vp=0) must all produce the same i64 hash as each other (a dedicated null-hash value). The null hash need not equal any particular value.",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": {
+        "data": [1, 0, 0, 2, 0],
+        "vp":   [1, 0, 0, 1, 0]
+      },
+      "expected": {
+        "equal_groups": [[0], [1, 2, 4], [3]]
+      }
+    },
+    { "export": "hash_i32", "name": "hash_i32__empty",
+      "note": "len=0 is a valid no-op; no hashes written",
+      "inputs": { "data": [], "vp": [] },
+      "expected": { "out_hash": [] } },
+    { "export": "hash_i32", "name": "hash_i32__len1",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": { "data": [42], "vp": [1] },
+      "expected": { "equal_groups": [[0]] } },
+    { "export": "hash_i32", "name": "hash_i32__len9_padding",
+      "note": "len=9 (not mult of 8): 9 hashes written",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": {
+        "data": [1, 2, 3, 4, 5, 6, 7, 8, 1],
+        "vp":   [1, 1, 1, 1, 1, 1, 1, 1, 1]
+      },
+      "expected": {
+        "equal_groups": [[0, 8], [1], [2], [3], [4], [5], [6], [7]]
+      }
+    },
+    { "export": "hash_i32", "name": "hash_i32__no_null_fast_path",
+      "note": "Omitting vp passes validity_ptr=0 (all-valid fast path)",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": { "data": [10, 20, 10] },
+      "expected": { "equal_groups": [[0, 2], [1]] } },
+
+    { "export": "hash_u32", "name": "hash_u32__equal_values_equal_hashes",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": { "data": [4294967295, 0, 4294967295], "vp": [1, 1, 1] },
+      "expected": { "equal_groups": [[0, 2], [1]] } },
+    { "export": "hash_u32", "name": "hash_u32__empty",
+      "inputs": { "data": [], "vp": [] }, "expected": { "out_hash": [] } },
+
+    { "export": "hash_f64", "name": "hash_f64__equal_values_equal_hashes",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": { "data": [1.0, 2.0, 1.0, 3.0], "vp": [1, 1, 1, 1] },
+      "expected": { "equal_groups": [[0, 2], [1], [3]] } },
+    { "export": "hash_f64", "name": "hash_f64__null_equal_hash",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": { "data": [1.0, 0.0, 0.0], "vp": [1, 0, 0] },
+      "expected": { "equal_groups": [[0], [1, 2]] } },
+    { "export": "hash_f64", "name": "hash_f64__empty",
+      "inputs": { "data": [], "vp": [] }, "expected": { "out_hash": [] } },
+
+    { "export": "hash_f32", "name": "hash_f32__equal_values_equal_hashes",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": { "data": [1.5, 2.5, 1.5], "vp": [1, 1, 1] },
+      "expected": { "equal_groups": [[0, 2], [1]] } },
+    { "export": "hash_f32", "name": "hash_f32__empty",
+      "inputs": { "data": [], "vp": [] }, "expected": { "out_hash": [] } },
+
+    { "export": "hash_combine", "name": "hash_combine__same_inputs_same_output",
+      "note": "PROPERTY TEST: hash_combine(acc, add, len) modifies acc in-place. Two calls with identical (acc, add) arrays must produce identical results. The runner calls hash_combine twice with the same inputs and verifies the outputs match.",
+      "property": "deterministic_in_place",
+      "inputs": {
+        "acc_hash": ["1", "2", "3"],
+        "add_hash": ["10", "20", "30"]
+      },
+      "expected": { "note": "output acc_hash values are implementation-defined; tested via determinism" } },
+    { "export": "hash_combine", "name": "hash_combine__different_combinations_differ",
+      "note": "PROPERTY TEST: hash_combine([h1,h1], [h2,h3]) → output[0] should differ from output[1] when h2 != h3 (with high probability; collisions in test data would be a fixture bug).",
+      "property": "equal_inputs_equal_hashes",
+      "inputs": {
+        "acc_hash": ["1", "1"],
+        "add_hash": ["10", "20"]
+      },
+      "expected": {
+        "equal_groups": [[0], [1]]
+      }
+    },
+    { "export": "hash_combine", "name": "hash_combine__empty",
+      "inputs": { "acc_hash": [], "add_hash": [] }, "expected": {} },
+
+    { "export": "group_build", "name": "group_build__all_distinct",
+      "note": "All distinct hash values → each element gets its own group; group_count = len. i64 hash values as decimal strings.",
+      "inputs": {
+        "keys_hash": ["1", "2", "3", "4", "5"]
+      },
+      "expected": {
+        "group_count": 5,
+        "partitions": [[0], [1], [2], [3], [4]]
+      }
+    },
+    { "export": "group_build", "name": "group_build__all_same",
+      "note": "All same hash → one group; group_count = 1",
+      "inputs": {
+        "keys_hash": ["42", "42", "42"]
+      },
+      "expected": {
+        "group_count": 1,
+        "partitions": [[0, 1, 2]]
+      }
+    },
+    { "export": "group_build", "name": "group_build__mixed",
+      "note": "Three distinct hash values; partition structure must match input hash equality",
+      "inputs": {
+        "keys_hash": ["1", "2", "1", "3", "2"]
+      },
+      "expected": {
+        "group_count": 3,
+        "partitions": [[0, 2], [1, 4], [3]]
+      }
+    },
+    { "export": "group_build", "name": "group_build__empty",
+      "inputs": { "keys_hash": [] },
+      "expected": { "group_count": 0, "partitions": [] } },
+    { "export": "group_build", "name": "group_build__len1",
+      "inputs": { "keys_hash": ["99"] },
+      "expected": { "group_count": 1, "partitions": [[0]] } },
+    { "export": "group_build", "name": "group_build__len5_two_groups",
+      "inputs": {
+        "keys_hash": ["100", "200", "100", "200", "100"]
+      },
+      "expected": {
+        "group_count": 2,
+        "partitions": [[0, 2, 4], [1, 3]]
+      }
+    },
+    { "export": "group_build", "name": "group_build__null_key_is_own_group",
+      "note": "Per dtypes.md §4.5: null key values form their own group in groupby (unlike equijoin where null!=null). The null-hash from hash_dt is a specific i64 that all nulls share → group_build assigns them to one group. The dedicated null hash value is chosen by the implementation; the fixture supplies it directly so we can test group_build in isolation.",
+      "inputs": {
+        "keys_hash": ["0", "1", "0", "2", "0"],
+        "note": "Hash value '0' represents the null hash (implementation uses 0 or a dedicated value; here we test that three identical 'null' hashes form one group)"
+      },
+      "expected": {
+        "group_count": 3,
+        "partitions": [[0, 2, 4], [1], [3]]
+      }
+    },
+
+    { "export": "join_hash_inner", "name": "join_hash_inner__basic",
+      "note": "Build on right side, probe left rows in order. left=[100,200,300], right=[200,100,200]. l[0]=100 matches r[1]; l[1]=200 matches r[0] then r[2] (build order); l[2]=300 no match → no output row for inner join.",
+      "inputs": {
+        "lh": ["100", "200", "300"], "l_vp": [1, 1, 1],
+        "rh": ["200", "100", "200"], "r_vp": [1, 1, 1]
+      },
+      "expected": { "pairs": [[0, 1], [1, 0], [1, 2]] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__no_match",
+      "note": "No hash value in left appears in right → empty result.",
+      "inputs": {
+        "lh": ["100"], "l_vp": [1],
+        "rh": ["200"], "r_vp": [1]
+      },
+      "expected": { "pairs": [] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__empty",
+      "inputs": {
+        "lh": [], "l_vp": [],
+        "rh": [], "r_vp": []
+      },
+      "expected": { "pairs": [] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__null_never_matches",
+      "note": "Null-validity rows (vp=0) never match even when hash values are identical (dtypes.md §4.5: 'null != null for equijoin'). l[0]=100 valid matches r[0]=100 valid. l[1] has vp=0 → no match output. r[1] has vp=0 → cannot be matched.",
+      "inputs": {
+        "lh": ["100", "0"], "l_vp": [1, 0],
+        "rh": ["100", "0"], "r_vp": [1, 0]
+      },
+      "expected": { "pairs": [[0, 0]] }
+    },
+    { "export": "join_hash_inner", "name": "join_hash_inner__duplicate_right_matches",
+      "note": "One left row matches multiple right rows; duplicates emitted in build (right) order.",
+      "inputs": {
+        "lh": ["200"], "l_vp": [1],
+        "rh": ["100", "200", "200"], "r_vp": [1, 1, 1]
+      },
+      "expected": { "pairs": [[0, 1], [0, 2]] }
+    },
+
+    { "export": "join_hash_left", "name": "join_hash_left__basic",
+      "note": "Left join: unmatched left rows emit [l_idx, -1]. l[0]=100 no match → [0,-1]; l[1]=200 matches r[0] → [1,0]; l[2]=300 no match → [2,-1].",
+      "inputs": {
+        "lh": ["100", "200", "300"], "l_vp": [1, 1, 1],
+        "rh": ["200"], "r_vp": [1]
+      },
+      "expected": { "pairs": [[0, -1], [1, 0], [2, -1]] }
+    },
+    { "export": "join_hash_left", "name": "join_hash_left__null_key_left",
+      "note": "Null-key left rows (vp=0) emit [l_idx,-1] per wasm-abi.md §9 ('join_hash_left emits (l_idx,-1) for unmatched/null-key left rows'). l[0]=100 valid matches r[0] → [0,0]; l[1] null → [1,-1]; l[2]=200 no match → [2,-1].",
+      "inputs": {
+        "lh": ["100", "0", "200"], "l_vp": [1, 0, 1],
+        "rh": ["100"], "r_vp": [1]
+      },
+      "expected": { "pairs": [[0, 0], [1, -1], [2, -1]] }
+    },
+    { "export": "join_hash_left", "name": "join_hash_left__empty",
+      "inputs": {
+        "lh": [], "l_vp": [],
+        "rh": [], "r_vp": []
+      },
+      "expected": { "pairs": [] }
+    },
+    { "export": "join_hash_left", "name": "join_hash_left__all_matched",
+      "note": "All left rows match; no -1 entries emitted.",
+      "inputs": {
+        "lh": ["100", "200"], "l_vp": [1, 1],
+        "rh": ["200", "100"], "r_vp": [1, 1]
+      },
+      "expected": { "pairs": [[0, 1], [1, 0]] }
+    }
+  ]
+}
