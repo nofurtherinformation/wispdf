@@ -11,8 +11,9 @@ export * from './expr/index.js';
 // Phase 3 — DataFrame / Series / GroupBy / join API (P3.2).
 export * from './frame/index.js';
 
-// Phase 5 — opt-in parallel mode (ADR-006).
-export { enableThreads, splitChunks } from './workers/index.js';
+// Phase 5 — opt-in parallel mode (ADR-006) lives in the "skidi/workers" subpath
+// export (separate bundle entry) to keep the main entry inside the §1 size budget.
+// Type-only re-exports are free:
 export type { ThreadsConfig, ThreadsHandle } from './workers/index.js';
 
 // Phase 6 — I/O: CSV reader, JSON wrappers, Arrow IPC (P6.E).
