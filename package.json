@@ -33,6 +33,7 @@
     "bench": "node bench/run.mjs"
   },
   "devDependencies": {
+    "apache-arrow": "^21.1.0",
     "arquero": "^8.0.3",
     "danfojs": "^1.2.0",
     "fast-check": "^3.22.0",

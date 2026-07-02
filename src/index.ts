@@ -15,6 +15,9 @@ export * from './frame/index.js';
 export { enableThreads, splitChunks } from './workers/index.js';
 export type { ThreadsConfig, ThreadsHandle } from './workers/index.js';
 
+// Phase 6 — I/O: CSV reader, JSON wrappers, Arrow IPC (P6.E).
+export * from './io/index.js';
+
 export const VERSION = '0.0.1';
 
 /** Returns a greeting string. Placeholder retained for the scaffold smoke test. */
