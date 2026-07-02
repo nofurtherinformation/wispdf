@@ -14,7 +14,7 @@ import { col } from '../../src/expr/index.js';
 
 let rt: DfRuntime;
 beforeAll(async () => {
-  rt = await loadRuntimeForTest(false);
+  rt = await loadRuntimeForTest();
 });
 
 describe('construction & export', () => {

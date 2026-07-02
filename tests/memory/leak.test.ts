@@ -5,7 +5,7 @@ import { loadForTest } from './helper.js';
 // of varied sizes must not grow linear memory monotonically (Phase-1 gate).
 describe('allocator leak / freelist reuse', () => {
   it('reuses freed blocks and does not grow memory monotonically', async () => {
-    const mod = await loadForTest(false);
+    const mod = await loadForTest();
     const pages = () => mod.memory.buffer.byteLength / 65536;
 
     // A fixed but varied set of sizes exercised every cycle. Each cycle frees
@@ -36,7 +36,7 @@ describe('allocator leak / freelist reuse', () => {
   });
 
   it('drains fully when all live blocks are freed (batch cycles)', async () => {
-    const mod = await loadForTest(false);
+    const mod = await loadForTest();
     const pages = () => mod.memory.buffer.byteLength / 65536;
     const batch = [16, 4096, 240, 64, 1500, 32, 900, 12000];
 

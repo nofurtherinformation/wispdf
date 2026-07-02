@@ -9,7 +9,7 @@ import { freeColumn, type Cell } from '../../src/memory/column.js';
 import { loadEnv, TestFrame, takeColumn, type TestEnv, type ColSpec } from './helper.js';
 
 let env: TestEnv;
-beforeAll(async () => { env = await loadEnv(false); });
+beforeAll(async () => { env = await loadEnv(); });
 
 function withFrame<T>(specs: Record<string, ColSpec>, fn: (f: TestFrame) => T): T {
   const f = new TestFrame(env, specs);

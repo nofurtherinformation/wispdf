@@ -14,7 +14,7 @@ import { loadEnv, TestFrame, type TestEnv } from './helper.js';
 import { naiveColumn, naiveScalar, cellEq, cellClose, type Cell, type JSFrame } from './naive.js';
 
 let env: TestEnv;
-beforeAll(async () => { env = await loadEnv(false); });
+beforeAll(async () => { env = await loadEnv(); });
 
 const SCHEMA = schemaOf({
   a: 'f64', b: 'f64', c: 'i32', d: 'i32', e: 'f32', g: 'u32', s: 'utf8', k: 'bool',

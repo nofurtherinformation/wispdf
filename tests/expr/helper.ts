@@ -27,13 +27,19 @@ import type { FrameView, KernelWasm } from '../../src/expr/frame.js';
 const __dir = dirname(fileURLToPath(import.meta.url));
 const WASM_DIST = join(__dir, '..', '..', 'wasm', 'dist');
 
+/**
+ * Default build to use when no explicit `simd` flag is passed.
+ * Set `WASM_BUILD=simd` (env var) to exercise the SIMD path (ADR-004).
+ */
+export const BUILD_SIMD = process.env['WASM_BUILD'] === 'simd';
+
 export interface TestEnv {
   ctx: MemoryContext;
   wasm: KernelWasm;
 }
 
 /** Load a wasm build and expose both the memory context and the full kernel exports. */
-export async function loadEnv(simd = false): Promise<TestEnv> {
+export async function loadEnv(simd = BUILD_SIMD): Promise<TestEnv> {
   const bytes = await readFile(join(WASM_DIST, simd ? 'simd.wasm' : 'scalar.wasm'));
   const { instance } = await WebAssembly.instantiate(bytes, {});
   const ex = instance.exports as unknown as KernelWasm & WasmMemoryModule;

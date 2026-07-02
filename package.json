@@ -25,7 +25,11 @@
     "build:js": "tsup",
     "build": "npm run build:wasm && npm run build:js && node scripts/copy-wasm.mjs",
     "test": "vitest run",
-    "gate": "npm run build && npm run test && node scripts/check-size.mjs",
+    "test:scalar": "WASM_BUILD=scalar vitest run",
+    "test:simd": "WASM_BUILD=simd vitest run",
+    "gate": "npm run build && npm run test:scalar && npm run test:simd && node scripts/check-size.mjs",
+    "gate:bench": "node scripts/check-regression.mjs",
+    "fuzz": "node tests/fuzz/fuzz.mjs",
     "bench": "node bench/run.mjs"
   },
   "devDependencies": {

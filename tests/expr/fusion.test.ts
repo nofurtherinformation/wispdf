@@ -11,7 +11,7 @@ import { takeColumn } from './helper.js';
 import { loadEnv, TestFrame, type TestEnv, type ColSpec } from './helper.js';
 
 let env: TestEnv;
-beforeAll(async () => { env = await loadEnv(false); });
+beforeAll(async () => { env = await loadEnv(); });
 
 function frame(specs: Record<string, ColSpec>): TestFrame {
   return new TestFrame(env, specs);
