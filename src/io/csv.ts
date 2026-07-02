@@ -1,0 +1,386 @@
+/**
+ * RFC-4180 CSV parser with typed column inference.
+ *
+ * Key features:
+ *   - Quoted fields, escaped quotes (""), embedded newlines and delimiters.
+ *   - CRLF and bare LF line endings; lone CR treated as data.
+ *   - Streaming-friendly internal design: `ChunkParser` is a stateful, chunk-fed
+ *     parser (feed(s)/finish()). `fromCSV` drives it synchronously over the full text.
+ *     ReadableStream adapter is a v2 nice-to-have (see ponytail note below).
+ *
+ * Type inference ladder (applied column-by-column over a sample of up to
+ * `INFER_ROWS` rows after null-value stripping):
+ *
+ *   1. i32   — integer in [-(2^31), 2^31-1], no decimal point, no exponent.
+ *   2. f64   — any string parseable by `Number()` that is finite (or ±Infinity),
+ *              i.e. `!isNaN(n)` after trimming.
+ *   3. bool  — case-insensitive "true" / "false".
+ *   4. utf8  — fallback.
+ *
+ * Null values: the `nullValues` option (default `['', 'null', 'NA']`) is
+ * checked BEFORE inference. A null-value cell becomes `null` in any dtype column.
+ *
+ * v2 nice-to-have (not shipped): ReadableStream adapter wrapping ChunkParser.
+ * // ponytail: fromCSVStream(stream, opts) → v2 when ReadableStream usage is confirmed
+ */
+
+import { DataFrame, type FrameOptions } from '../frame/dataframe.js';
+import type { DType } from '../memory/dtype.js';
+import type { Cell } from '../memory/column.js';
+import type { DfRuntime } from '../frame/runtime.js';
+
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+
+export interface FromCsvOptions {
+  /** Column delimiter (default: ','). */
+  readonly delimiter?: string;
+  /** If true (default), treat first row as column headers. */
+  readonly header?: boolean;
+  /**
+   * Override column names (used when header=false, or to rename columns).
+   * When header=true, these override the parsed header names.
+   */
+  readonly columns?: readonly string[];
+  /** Force specific dtypes (column name → dtype). Skips inference for those columns. */
+  readonly dtypes?: Readonly<Record<string, DType>>;
+  /**
+   * Values treated as null (case-sensitive). Default: `['', 'null', 'NA']`.
+   * An empty string means the empty field is null (the default for CSV).
+   */
+  readonly nullValues?: readonly string[];
+  /** Skip this many rows from the top (before header if present). */
+  readonly skipRows?: number;
+  /** Maximum number of data rows to read (not counting header or skipped rows). */
+  readonly maxRows?: number;
+  /** Runtime to use. If omitted, uses the default runtime. */
+  readonly runtime?: DfRuntime;
+}
+
+const DEFAULT_NULL_VALUES = ['', 'null', 'NA'];
+const INFER_ROWS = 100; // sample size for type inference
+
+// ---------------------------------------------------------------------------
+// RFC-4180 chunk-fed parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Stateful RFC-4180 CSV parser.
+ * Feed text chunks with `feed(s)` and call `finish()` to flush the last row.
+ * Each completed row is passed to the `onRow` callback.
+ *
+ * Design: simple state machine over a single `remaining` string. Performance is
+ * not critical here (CSV ingestion is I/O-bound); correctness is.
+ */
+export class ChunkParser {
+  private buf = '';       // unparsed bytes from previous chunk(s)
+  private row: string[] = [];
+  private field = '';
+  private inQuote = false;
+  private readonly delim: string;
+  private readonly onRow: (row: string[]) => void;
+
+  constructor(delimiter: string, onRow: (row: string[]) => void) {
+    this.delim = delimiter;
+    this.onRow = onRow;
+  }
+
+  feed(chunk: string): void {
+    this.buf += chunk;
+    this.parse(false);
+  }
+
+  finish(): void {
+    this.parse(true);
+  }
+
+  private parse(eof: boolean): void {
+    const d = this.delim;
+    let i = 0;
+    const s = this.buf;
+    const len = s.length;
+
+    while (i < len) {
+      const ch = s[i]!;
+
+      if (this.inQuote) {
+        if (ch === '"') {
+          // Peek next character
+          if (i + 1 < len) {
+            if (s[i + 1] === '"') {
+              // Escaped quote — append one quote and advance past both
+              this.field += '"';
+              i += 2;
+            } else {
+              // End of quoted field
+              this.inQuote = false;
+              i++;
+            }
+          } else if (eof) {
+            // End of input while in quote — close it (malformed but tolerate)
+            this.inQuote = false;
+            i++;
+          } else {
+            // Need more data to decide if this is "" or end-of-quote
+            break;
+          }
+        } else {
+          this.field += ch;
+          i++;
+        }
+      } else {
+        if (ch === '"') {
+          this.inQuote = true;
+          i++;
+        } else if (s.startsWith(d, i)) {
+          // Field separator
+          this.row.push(this.field);
+          this.field = '';
+          i += d.length;
+        } else if (ch === '\r') {
+          if (i + 1 < len) {
+            if (s[i + 1] === '\n') {
+              // CRLF
+              this.emitRow();
+              i += 2;
+            } else {
+              // Lone CR — treat as data (not a standard line ending)
+              this.field += ch;
+              i++;
+            }
+          } else if (eof) {
+            // Lone CR at end of input
+            this.emitRow();
+            i++;
+          } else {
+            // Can't decide — need more data
+            break;
+          }
+        } else if (ch === '\n') {
+          this.emitRow();
+          i++;
+        } else {
+          this.field += ch;
+          i++;
+        }
+      }
+    }
+
+    this.buf = s.slice(i); // Keep unparsed remainder for next chunk
+
+    if (eof && (this.row.length > 0 || this.field.length > 0)) {
+      if (this.inQuote) {
+        throw new Error(
+          `CSV parse error: unterminated quoted field starting near "${this.field.slice(0, 40)}"`,
+        );
+      }
+      this.emitRow();
+    }
+  }
+
+  private emitRow(): void {
+    this.row.push(this.field);
+    this.field = '';
+    this.onRow(this.row);
+    this.row = [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Type inference
+// ---------------------------------------------------------------------------
+
+const I32_MIN = -(2 ** 31);
+const I32_MAX = 2 ** 31 - 1;
+
+function isI32(s: string): boolean {
+  if (s.length === 0) return false;
+  // Allow leading minus, but no decimal point, no exponent, no leading zeros
+  // (except '0' itself), no whitespace — strict integer form.
+  let i = 0;
+  if (s[0] === '-') i = 1;
+  if (i === s.length) return false; // bare '-'
+  // Reject leading zeros (other than "0" itself)
+  if (s.length - i > 1 && s[i] === '0') return false;
+  for (; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 48 || c > 57) return false;
+  }
+  const n = Number(s);
+  return n >= I32_MIN && n <= I32_MAX && Number.isInteger(n);
+}
+
+function isF64(s: string): boolean {
+  if (s.length === 0) return false;
+  const n = Number(s);
+  return !isNaN(n);
+}
+
+function isBool(s: string): boolean {
+  const l = s.toLowerCase();
+  return l === 'true' || l === 'false';
+}
+
+type InferState = 'i32' | 'f64' | 'bool' | 'utf8';
+
+/** Promote the inference state given a new non-null cell value. */
+function promote(state: InferState, cell: string): InferState {
+  if (state === 'utf8') return 'utf8';
+  if (state === 'i32') {
+    if (isI32(cell)) return 'i32';
+    if (isF64(cell)) return 'f64';
+    if (isBool(cell)) return 'bool';
+    return 'utf8';
+  }
+  if (state === 'f64') {
+    if (isF64(cell)) return 'f64';
+    if (isBool(cell)) return 'bool';
+    return 'utf8';
+  }
+  // state === 'bool'
+  if (isBool(cell)) return 'bool';
+  if (isI32(cell)) return 'utf8'; // can't demote bool→i32 (ambiguous)
+  return 'utf8';
+}
+
+function inferDtypeFromSample(sample: string[], nullSet: Set<string>): DType {
+  let state: InferState = 'i32';
+  let seenNonNull = false;
+  for (const cell of sample) {
+    if (nullSet.has(cell)) continue;
+    seenNonNull = true;
+    state = promote(state, cell);
+    if (state === 'utf8') return 'utf8'; // can't get worse
+  }
+  if (!seenNonNull) return 'utf8'; // all-null column → utf8 (safe default)
+  return state as DType;
+}
+
+function parseCell(cell: string, dtype: DType, nullSet: Set<string>): Cell {
+  if (nullSet.has(cell)) return null;
+  switch (dtype) {
+    case 'i32':
+    case 'u32':
+    case 'f64':
+    case 'f32':
+      return Number(cell);
+    case 'bool':
+      return cell.toLowerCase() === 'true';
+    case 'utf8':
+      return cell;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// fromCSV()
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a CSV string into a DataFrame.
+ *
+ * @param text   - Full CSV text (a chunk-fed path for streaming is internal).
+ * @param opts   - Parsing and inference options.
+ *
+ * @throws If there are ragged rows (inconsistent column count) or unterminated quotes.
+ */
+export function fromCSV(text: string, opts: FromCsvOptions = {}): DataFrame {
+  const delimiter  = opts.delimiter ?? ',';
+  const hasHeader  = opts.header !== false;
+  const skipRows   = opts.skipRows ?? 0;
+  const maxRows    = opts.maxRows ?? Infinity;
+  const nullSet    = new Set<string>(opts.nullValues ?? DEFAULT_NULL_VALUES);
+  const forceDtype = opts.dtypes ?? {};
+
+  // Collect raw rows
+  const rawRows: string[][] = [];
+  const parser = new ChunkParser(delimiter, (row) => rawRows.push(row));
+  parser.feed(text);
+  parser.finish();
+
+  const rtOpts = (rt: DfRuntime | undefined): FrameOptions => rt ? { runtime: rt } : {};
+
+  if (rawRows.length === 0) {
+    // Empty file — return empty DataFrame
+    return DataFrame.fromColumns({}, rtOpts(opts.runtime));
+  }
+
+  // Apply skipRows
+  const startIdx = skipRows;
+  if (startIdx >= rawRows.length) {
+    return DataFrame.fromColumns({}, rtOpts(opts.runtime));
+  }
+
+  // Extract header
+  let colNames: string[];
+  let dataStart: number;
+
+  if (hasHeader) {
+    colNames = rawRows[startIdx]!;
+    dataStart = startIdx + 1;
+  } else {
+    const firstData = rawRows[startIdx]!;
+    colNames = firstData.map((_, i) => opts.columns?.[i] ?? `column_${i}`);
+    dataStart = startIdx;
+  }
+
+  // Override names from opts.columns
+  if (opts.columns) {
+    for (let i = 0; i < opts.columns.length; i++) {
+      colNames[i] = opts.columns[i]!;
+    }
+  }
+
+  const numCols = colNames.length;
+
+  // Collect data rows (up to maxRows), validate width
+  const dataRows = rawRows.slice(dataStart, dataStart + (isFinite(maxRows) ? maxRows : rawRows.length));
+
+  for (let r = 0; r < dataRows.length; r++) {
+    if (dataRows[r]!.length !== numCols) {
+      throw new Error(
+        `CSV parse error: row ${dataStart + r + 1} has ${dataRows[r]!.length} fields, ` +
+        `expected ${numCols} (columns: ${colNames.join(', ')})`,
+      );
+    }
+  }
+
+  if (dataRows.length === 0) {
+    const emptyCols: Record<string, Cell[]> = {};
+    const emptyDtypes: Record<string, DType> = {};
+    for (const name of colNames) {
+      emptyCols[name] = [];
+      emptyDtypes[name] = forceDtype[name] ?? 'utf8';
+    }
+    const emptyOpts: FrameOptions = { ...rtOpts(opts.runtime), dtypes: emptyDtypes };
+    return DataFrame.fromColumns(emptyCols as Record<string, import('../memory/column.js').ColumnInput>, emptyOpts);
+  }
+
+  // Infer dtypes using first INFER_ROWS rows
+  const sample = dataRows.slice(0, INFER_ROWS);
+  const dtypes: Record<string, DType> = {};
+  for (let c = 0; c < numCols; c++) {
+    const name = colNames[c]!;
+    if (forceDtype[name]) {
+      dtypes[name] = forceDtype[name];
+    } else {
+      const colSample = sample.map((row) => row[c]!);
+      dtypes[name] = inferDtypeFromSample(colSample, nullSet);
+    }
+  }
+
+  // Parse all cells
+  const colData: Record<string, Cell[]> = {};
+  for (const name of colNames) colData[name] = new Array(dataRows.length);
+
+  for (let r = 0; r < dataRows.length; r++) {
+    const row = dataRows[r]!;
+    for (let c = 0; c < numCols; c++) {
+      const name = colNames[c]!;
+      colData[name]![r] = parseCell(row[c]!, dtypes[name]!, nullSet);
+    }
+  }
+
+  const finalOpts: FrameOptions = { ...rtOpts(opts.runtime), dtypes };
+  return DataFrame.fromColumns(colData as Record<string, import('../memory/column.js').ColumnInput>, finalOpts);
+}
