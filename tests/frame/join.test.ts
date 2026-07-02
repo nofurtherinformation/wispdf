@@ -10,7 +10,7 @@ import type { Cell } from '../../src/memory/column.js';
 
 let rt: DfRuntime;
 beforeAll(async () => {
-  rt = await loadRuntimeForTest(false);
+  rt = await loadRuntimeForTest();
 });
 
 function sortRecs(recs: Array<Record<string, Cell>>, key: string): Array<Record<string, Cell>> {

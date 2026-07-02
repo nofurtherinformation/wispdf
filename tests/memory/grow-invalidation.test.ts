@@ -6,7 +6,7 @@ import { createViewOf, type ColumnBuffer } from '../../src/memory/views.js';
 // generation change and rebuild over the current buffer, reading correct data.
 describe('grow invalidation (viewOf)', () => {
   it('detects the generation bump and rebuilds views with correct data', async () => {
-    const mod = await loadForTest(false);
+    const mod = await loadForTest();
     const viewOf = createViewOf(mod);
 
     const N = 8;
@@ -43,7 +43,7 @@ describe('grow invalidation (viewOf)', () => {
   });
 
   it('rebuilds ALL registered views on a single generation change', async () => {
-    const mod = await loadForTest(false);
+    const mod = await loadForTest();
     const viewOf = createViewOf(mod);
 
     const cols: ColumnBuffer[] = [];

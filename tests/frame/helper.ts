@@ -16,8 +16,14 @@ import type { DType } from '../../src/memory/dtype.js';
 const __dir = dirname(fileURLToPath(import.meta.url));
 const WASM_DIST = join(__dir, '..', '..', 'wasm', 'dist');
 
-/** Load a fresh runtime for a test build (scalar by default). */
-export async function loadRuntimeForTest(simd = false): Promise<DfRuntime> {
+/**
+ * Default build to use when no explicit `simd` flag is passed.
+ * Set `WASM_BUILD=simd` (env var) to exercise the SIMD path (ADR-004).
+ */
+export const BUILD_SIMD = process.env['WASM_BUILD'] === 'simd';
+
+/** Load a fresh runtime for a test build. Defaults to WASM_BUILD env var (scalar if unset). */
+export async function loadRuntimeForTest(simd = BUILD_SIMD): Promise<DfRuntime> {
   const bytes = await readFile(join(WASM_DIST, simd ? 'simd.wasm' : 'scalar.wasm'));
   const { instance } = await WebAssembly.instantiate(bytes, {});
   return runtimeFromExports(instance.exports, simd);

@@ -11,7 +11,7 @@ import { freeColumn } from '../../src/memory/column.js';
 import { loadEnv, TestFrame, type TestEnv } from './helper.js';
 
 let env: TestEnv;
-beforeAll(async () => { env = await loadEnv(false); });
+beforeAll(async () => { env = await loadEnv(); });
 
 /** Alloc+free a fixed block; its pointer is a fingerprint of the freelist state. */
 function probe(f: TestFrame): number {
