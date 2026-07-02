@@ -1,4 +1,4 @@
-# Phase 0 Status Ledger
+# Status Ledger (Phase 0 → Phase 1)
 
 Maintained by the orchestrator (Fable). Subagents must not edit this file.
 
@@ -13,6 +13,8 @@ Last updated: 2026-07-02
 | dataframe-99s.3 | P0.3a Language spike: AssemblyScript kernels | Sonnet | done | correctness PASS (both builds) | 3 kernels × {scalar,simd}; gzip 500/582 B |
 | dataframe-99s.4 | P0.3b Language spike: Rust kernels | Sonnet | done | correctness PASS after LEAD fix | 3 kernels × {scalar,simd}; gzip 673/910 B. **LEAD fixed a SIMD `sum_f64_null` null-path double-count bug** (splat into both lanes); fast-path throughput unchanged. |
 | dataframe-99s.5 | P0.4 ADR-007 decision + contracts (wasm-abi.md + dtypes.md) | Opus (LEAD) | done | fresh benches re-run + verified; `npm run gate` green | **ADR-007 = Rust** (accepted). `contracts/wasm-abi.md` v1 + `contracts/dtypes.md` v1 written. |
+| dataframe-39z.1 | P1.1 Rust arena allocator + wasm build infra + viewOf layer | Opus | done | `npm run gate` green (build+test+size); 29 tests | Bump+freelist arena (`alloc`/`free`/`realloc`/`mem_generation`), dual scalar/simd builds, SIMD-detect loader, single `viewOf` generation-counter accessor. `contracts/memory.d.ts` v0.9-draft. |
+| dataframe-39z.2 | P1.2 Columns, dict string store, dtype registry, zero-copy slice | Opus | done | `npm run gate` green (build+test+size); 50 tests | Dtype registry + Arrow validity bitmap + column create/toArray (typed fast + null-detecting slow path) + dict store (build/decode-memo/unify) + zero-copy slice (data byte-offset baked in `dataPtr`, validity bit-offset). `contracts/memory.d.ts` **v1 final**. |
 
 ## Gate Definitions
 
