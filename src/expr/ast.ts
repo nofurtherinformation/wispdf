@@ -1,0 +1,255 @@
+/**
+ * Expression AST (Phase 3, P3.1 deliverable §1).
+ *
+ * The public expression surface from spec §4. `col('a')` / `lit(v)` are the two
+ * leaf builders; every operator is a chainable method returning a **new**
+ * {@link Expr}. Nodes are immutable (deep-frozen), so an `Expr` can be shared and
+ * re-compiled without aliasing hazards.
+ *
+ *   col('a').gt(5).and(col('b').eq('x'))
+ *   col('a').add(col('b')).mul(2)
+ *   col('a').cast('f32').sum()
+ *
+ * Type resolution (result dtype, the single int→float widening rule, cast-insertion
+ * points, unsupported-mix errors) lives in `./dtypes.ts`; lowering to kernel calls
+ * lives in `./compile.ts`. This file is pure data + ergonomics — no wasm, no memory.
+ */
+
+import type { DType } from '../memory/dtype.js';
+
+/** Binary arithmetic operators (dtypes.md §3.1/§3.2). */
+export type ArithOp = 'add' | 'sub' | 'mul' | 'div' | 'mod';
+/** Comparison operators → boolean/mask (dtypes.md §4.1). */
+export type CompareOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne';
+/** Short-circuit-free three-valued boolean operators (dtypes.md §4.2). */
+export type BoolOp = 'and' | 'or';
+/** Reduction operators (dtypes.md §4.3). */
+export type AggOp =
+  | 'sum'
+  | 'mean'
+  | 'min'
+  | 'max'
+  | 'count'
+  | 'nunique'
+  | 'std'
+  | 'var'
+  | 'first'
+  | 'last';
+
+/** A raw JS scalar that a literal / fill value can hold. */
+export type ScalarValue = number | string | boolean;
+
+/** The immutable AST node inside every {@link Expr}. Discriminated on `kind`. */
+export type ExprNode =
+  | Readonly<{ kind: 'col'; name: string }>
+  | Readonly<{ kind: 'lit'; value: ScalarValue; dtype: DType | null }>
+  | Readonly<{ kind: 'arith'; op: ArithOp; left: Expr; right: Expr }>
+  | Readonly<{ kind: 'neg'; operand: Expr }>
+  | Readonly<{ kind: 'compare'; op: CompareOp; left: Expr; right: Expr }>
+  | Readonly<{ kind: 'bool'; op: BoolOp; left: Expr; right: Expr }>
+  | Readonly<{ kind: 'not'; operand: Expr }>
+  | Readonly<{ kind: 'isNull'; operand: Expr }>
+  | Readonly<{ kind: 'fillNull'; operand: Expr; value: ScalarValue }>
+  | Readonly<{ kind: 'cast'; operand: Expr; to: DType }>
+  | Readonly<{ kind: 'agg'; op: AggOp; operand: Expr }>;
+
+/** Anything accepted where an expression operand is expected. Raw scalars wrap to `lit`. */
+export type ExprLike = Expr | ScalarValue;
+
+/** Wrap an {@link ExprLike} into an {@link Expr} (raw scalar → `lit`). */
+export function toExpr(x: ExprLike): Expr {
+  return x instanceof Expr ? x : lit(x);
+}
+
+/**
+ * An immutable expression tree node with a chainable, pandas-familiar surface
+ * (spec §4). Every method returns a new `Expr`; the receiver is never mutated.
+ */
+export class Expr {
+  /** The frozen AST node this expression wraps. */
+  readonly node: ExprNode;
+
+  /** @internal — construct via {@link col}/{@link lit} or a chained method. */
+  constructor(node: ExprNode) {
+    this.node = Object.freeze(node);
+    Object.freeze(this);
+  }
+
+  // ── arithmetic (dtypes.md §3.1/§3.2) ──────────────────────────────────────
+  add(other: ExprLike): Expr {
+    return arith('add', this, other);
+  }
+  sub(other: ExprLike): Expr {
+    return arith('sub', this, other);
+  }
+  mul(other: ExprLike): Expr {
+    return arith('mul', this, other);
+  }
+  div(other: ExprLike): Expr {
+    return arith('div', this, other);
+  }
+  mod(other: ExprLike): Expr {
+    return arith('mod', this, other);
+  }
+  neg(): Expr {
+    return new Expr({ kind: 'neg', operand: this });
+  }
+
+  // ── comparison (dtypes.md §4.1) ───────────────────────────────────────────
+  gt(other: ExprLike): Expr {
+    return compare('gt', this, other);
+  }
+  ge(other: ExprLike): Expr {
+    return compare('ge', this, other);
+  }
+  lt(other: ExprLike): Expr {
+    return compare('lt', this, other);
+  }
+  le(other: ExprLike): Expr {
+    return compare('le', this, other);
+  }
+  eq(other: ExprLike): Expr {
+    return compare('eq', this, other);
+  }
+  ne(other: ExprLike): Expr {
+    return compare('ne', this, other);
+  }
+
+  // ── boolean, three-valued Kleene (dtypes.md §4.2) ─────────────────────────
+  and(other: ExprLike): Expr {
+    return new Expr({ kind: 'bool', op: 'and', left: this, right: toExpr(other) });
+  }
+  or(other: ExprLike): Expr {
+    return new Expr({ kind: 'bool', op: 'or', left: this, right: toExpr(other) });
+  }
+  not(): Expr {
+    return new Expr({ kind: 'not', operand: this });
+  }
+
+  // ── null utilities (dtypes.md §4.5) ───────────────────────────────────────
+  isNull(): Expr {
+    return new Expr({ kind: 'isNull', operand: this });
+  }
+  /** `notNull` = `not(isNull)` (dtypes.md §4.5). */
+  notNull(): Expr {
+    return this.isNull().not();
+  }
+  fillNull(value: ScalarValue): Expr {
+    return new Expr({ kind: 'fillNull', operand: this, value });
+  }
+
+  // ── cast (dtypes.md §2, explicit only) ────────────────────────────────────
+  cast(to: DType): Expr {
+    return new Expr({ kind: 'cast', operand: this, to });
+  }
+
+  // ── aggregations (dtypes.md §4.3) ─────────────────────────────────────────
+  sum(): Expr {
+    return agg('sum', this);
+  }
+  mean(): Expr {
+    return agg('mean', this);
+  }
+  min(): Expr {
+    return agg('min', this);
+  }
+  max(): Expr {
+    return agg('max', this);
+  }
+  count(): Expr {
+    return agg('count', this);
+  }
+  nunique(): Expr {
+    return agg('nunique', this);
+  }
+  std(): Expr {
+    return agg('std', this);
+  }
+  var(): Expr {
+    return agg('var', this);
+  }
+  first(): Expr {
+    return agg('first', this);
+  }
+  last(): Expr {
+    return agg('last', this);
+  }
+
+  /** Readable, unambiguous rendering for `console.log` / error messages. */
+  toString(): string {
+    return render(this.node);
+  }
+}
+
+// ── leaf builders ───────────────────────────────────────────────────────────
+
+/** Reference the frame column named `name`. */
+export function col(name: string): Expr {
+  return new Expr({ kind: 'col', name });
+}
+
+/**
+ * A scalar literal. Its dtype is normally inferred from the operand it is combined
+ * with (an integer numeric literal adopts an integer column's dtype, a fractional
+ * one triggers int→float widening — see `./dtypes.ts`). Pass `dtype` to pin it.
+ */
+export function lit(value: ScalarValue, dtype?: DType): Expr {
+  return new Expr({ kind: 'lit', value, dtype: dtype ?? null });
+}
+
+// ── internal constructors ─────────────────────────────────────────────────────
+
+function arith(op: ArithOp, left: Expr, right: ExprLike): Expr {
+  return new Expr({ kind: 'arith', op, left, right: toExpr(right) });
+}
+
+function compare(op: CompareOp, left: Expr, right: ExprLike): Expr {
+  return new Expr({ kind: 'compare', op, left, right: toExpr(right) });
+}
+
+function agg(op: AggOp, operand: Expr): Expr {
+  return new Expr({ kind: 'agg', op, operand });
+}
+
+// ── rendering ─────────────────────────────────────────────────────────────────
+
+const ARITH_SYM: Record<ArithOp, string> = {
+  add: '+',
+  sub: '-',
+  mul: '*',
+  div: '/',
+  mod: '%',
+};
+
+function renderScalar(v: ScalarValue): string {
+  return typeof v === 'string' ? JSON.stringify(v) : String(v);
+}
+
+function render(node: ExprNode): string {
+  switch (node.kind) {
+    case 'col':
+      return `col(${JSON.stringify(node.name)})`;
+    case 'lit':
+      return node.dtype
+        ? `lit(${renderScalar(node.value)}, ${node.dtype})`
+        : `lit(${renderScalar(node.value)})`;
+    case 'arith':
+      return `(${render(node.left.node)} ${ARITH_SYM[node.op]} ${render(node.right.node)})`;
+    case 'neg':
+      return `(-${render(node.operand.node)})`;
+    case 'compare':
+      return `${render(node.left.node)}.${node.op}(${render(node.right.node)})`;
+    case 'bool':
+      return `${render(node.left.node)}.${node.op}(${render(node.right.node)})`;
+    case 'not':
+      return `${render(node.operand.node)}.not()`;
+    case 'isNull':
+      return `${render(node.operand.node)}.isNull()`;
+    case 'fillNull':
+      return `${render(node.operand.node)}.fillNull(${renderScalar(node.value)})`;
+    case 'cast':
+      return `${render(node.operand.node)}.cast(${node.to})`;
+    case 'agg':
+      return `${render(node.operand.node)}.${node.op}()`;
+  }
+}
