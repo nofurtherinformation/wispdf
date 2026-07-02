@@ -14,6 +14,10 @@
 #![no_std]
 
 mod arena;
+mod elementwise;
+mod hash;
+mod reduce;
+mod select;
 
 // Re-export the allocator API for potential Rust-side use by future kernels.
 // The wasm exports themselves come from `#[no_mangle]` in `arena` regardless.
