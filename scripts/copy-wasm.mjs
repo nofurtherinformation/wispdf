@@ -13,7 +13,7 @@ import { join } from 'node:path';
 const root = process.cwd();
 const srcDir = join(root, 'wasm', 'dist');
 const dstDir = join(root, 'dist');
-const files = ['scalar.wasm', 'simd.wasm'];
+const files = ['scalar.wasm', 'simd.wasm', 'simd-threads.wasm'];
 
 mkdirSync(dstDir, { recursive: true });
 
