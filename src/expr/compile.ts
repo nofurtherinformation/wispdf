@@ -53,6 +53,7 @@ import {
   type Validity,
   type ExecStats,
 } from './runtime.js';
+import { extractComponents } from '../temporal/vectorize.js';
 
 export type { ExecStats } from './runtime.js';
 
@@ -777,9 +778,60 @@ function evalCast(
 }
 
 // ── dt accessors ─────────────────────────────────────────────────────────────
-// ponytail: evalDt deferred — size gate allows 3 bytes headroom; full impl in dtField.ts when gate raises
-function evalDt(_rt: Runtime, _frame: FrameView, _c: DtComponent, _t: TExpr): never {
-  throw new Error('dt accessor not yet in main bundle (size gate)');
+
+/**
+ * Evaluate a dt accessor node: extract a single calendar component from a
+ * date32 or timestamp column.
+ *
+ * Implementation (ADR-010, ADR-012):
+ *   - date32: Int32Array view of days-since-epoch → civil.date32ToFields via extractComponents.
+ *   - timestamp (UTC): BigInt64Array view of epoch-ms → civil.timestampUtcToFields.
+ *   - timestamp (tz): same view, but routed through tz.getTzComponents per valid row.
+ *
+ * tz metadata is read from the source column when the operand is a direct
+ * column reference (the common path: `col('ts').dt.year()`). Cast expressions
+ * do not carry tz metadata.
+ *
+ * Result dtype is always i32 (dtypes.md §10).
+ */
+function evalDt(rt: Runtime, frame: FrameView, c: DtComponent, t: TExpr): ColVal {
+  const v = evalNumericColumn(rt, frame, t);
+  const len = rt.len;
+
+  // Resolve tz metadata: only available when the operand is a direct col ref.
+  let tz: string | undefined;
+  if (t.kind === 'col') {
+    const srcCol = frame.getColumn(t.name);
+    if (srcCol?.tz) tz = srcCol.tz;
+  }
+
+  // Get the validity bitmap (null = all-valid, matches extractComponents contract).
+  let validityBitmap: Uint8Array | null = null;
+  if (v.validity.ptr !== 0) {
+    validityBitmap = rt.view(v.validity.ptr, rt.validityBytes, 'u8') as Uint8Array;
+  }
+
+  // View the source data as the appropriate typed array.
+  let extractResult: { data: Int32Array };
+  if (v.dtype === 'date32') {
+    const dataView = rt.view(v.dataPtr, len, 'i32') as Int32Array;
+    extractResult = extractComponents(dataView, validityBitmap, c);
+  } else {
+    // timestamp: BigInt64Array (wasm='i64', 8 bytes per element)
+    const dataView = rt.view(v.dataPtr, len, 'i64') as BigInt64Array;
+    extractResult = extractComponents(dataView, validityBitmap, c, tz);
+  }
+
+  // Allocate a new wasm i32 buffer and copy the JS-side result into it.
+  const outPtr = rt.alloc(len * 4, 'data');
+  const outView = rt.view(outPtr, len, 'i32') as Int32Array;
+  outView.set(extractResult.data);
+
+  // Free the source data buffer if we own it (validity is forwarded as-is).
+  if (v.ownsData) rt.free(v.dataPtr);
+  if (v.ownsDict && v.dict) freeDict(frame, v.dict);
+
+  return colOf('i32', outPtr, v.validity, null, false);
 }
 
 // ── Aggregations ──────────────────────────────────────────────────────────────
