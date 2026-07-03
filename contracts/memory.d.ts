@@ -1,11 +1,17 @@
 /**
  * contracts/memory.d.ts — Memory core interface (Phase 1)
  *
- * STATUS: v1, final. Written by P1.1 (arena allocator, dual wasm builds, loader,
- * viewOf layer) and finalized by P1.2 (dtype registry, validity bitmap, column
- * representation, dictionary string store, zero-copy slice). This is the typed
- * surface the kernel (Phase 2), expression (Phase 3), and frame (Phase 3) layers
- * build on.
+ * STATUS: v1 final + v2 deltas. Written by P1.1 (arena allocator, dual wasm
+ * builds, loader, viewOf layer) and finalized by P1.2 (dtype registry, validity
+ * bitmap, column representation, dictionary string store, zero-copy slice). This
+ * is the typed surface the kernel (Phase 2), expression (Phase 3), and frame
+ * (Phase 3) layers build on.
+ *
+ * v2 deltas (bead dataframe-dh9.1; ADR-009 i64, ADR-010 temporals): `DType` gains
+ * `'i64' | 'date32' | 'timestamp'`; `ViewDType`/`ColumnView`/`TypedArrayCtor` gain
+ * `BigInt64Array`; `Cell`/`ColumnInput` gain `bigint`; `Column` gains optional `tz`
+ * metadata; `DTypeInfo.wasm` is now the *physical* kernel token (differs from `name`
+ * for temporals). No memory-layer function signatures changed.
  *
  * It mirrors the runtime in `src/memory/` and encodes the ABI guarantees from
  * `contracts/wasm-abi.md` (§2 memory ownership + generation counter, §3
@@ -87,8 +93,11 @@ export declare function loadWasmModule(
  * §1). `bool` is `u8` storage (0/1). NOTE: `utf8` is not here — a `utf8` column
  * is three buffers (i32 indices + i32 offsets + u8 bytes, ABI §4.4); P1.2 adds
  * the higher-level column/dictionary descriptors.
+ *
+ * v2 (ADR-009): `'i64'` maps to `BigInt64Array`. Temporal logical dtypes have no
+ * distinct view — `date32` uses the `'i32'` view, `timestamp` uses `'i64'`.
  */
-export type ViewDType = 'f64' | 'f32' | 'i32' | 'u32' | 'u8' | 'bool';
+export type ViewDType = 'f64' | 'f32' | 'i32' | 'u32' | 'u8' | 'bool' | 'i64';
 
 /** Location + shape of a column buffer inside linear memory. */
 export interface ColumnBuffer {
@@ -106,7 +115,8 @@ export type ColumnView =
   | Float32Array
   | Int32Array
   | Uint32Array
-  | Uint8Array;
+  | Uint8Array
+  | BigInt64Array; // v2 (ADR-009): i64 / timestamp physical storage
 
 /**
  * The single `viewOf` accessor (ADR-001). Caches `(generation, view)` per
@@ -153,8 +163,26 @@ export declare function createMemoryContext(mod: WasmMemoryModule): MemoryContex
 // Dtype registry (dtypes.md §1) — storage size, TypedArray, kernel-name token
 // ===========================================================================
 
-/** The v1 column dtypes (dtypes.md §1). `utf8` is dictionary-encoded (ABI §4.4). */
-export type DType = 'f64' | 'f32' | 'i32' | 'u32' | 'bool' | 'utf8';
+/**
+ * The column dtypes. v1 (dtypes.md §1): `f64 f32 i32 u32 bool utf8` (`utf8` is
+ * dictionary-encoded, ABI §4.4). v2 adds:
+ *  - `'i64'`      — signed 64-bit int, `BigInt64Array` storage (ADR-009).
+ *  - `'date32'`   — logical: days since epoch; **physical i32** (ADR-010).
+ *  - `'timestamp'`— logical: ms since epoch, always UTC; **physical i64**;
+ *                   optional {@link Column.tz} metadata (ADR-010).
+ * For temporals the kernel token ({@link DTypeInfo.wasm}) is the physical dtype,
+ * not the name (`date32`→`i32`, `timestamp`→`i64`).
+ */
+export type DType =
+  | 'f64'
+  | 'f32'
+  | 'i32'
+  | 'u32'
+  | 'bool'
+  | 'utf8'
+  | 'i64'
+  | 'date32'
+  | 'timestamp';
 
 /** `TypedArray` constructors a column data / auxiliary buffer can map to. */
 export type TypedArrayCtor =
@@ -162,21 +190,33 @@ export type TypedArrayCtor =
   | Float32ArrayConstructor
   | Int32ArrayConstructor
   | Uint32ArrayConstructor
-  | Uint8ArrayConstructor;
+  | Uint8ArrayConstructor
+  | BigInt64ArrayConstructor; // v2 (ADR-009): i64 / timestamp
 
-/** Static description of one v1 dtype used by column creation and (P2+) kernels. */
+/** Static description of one dtype used by column creation and (P2+) kernels. */
 export interface DTypeInfo {
   /** The dtype this describes. */
   readonly name: DType;
-  /** Bytes per stored element. `utf8` = 4 (the `i32` index into its dictionary). */
+  /**
+   * Bytes per stored element. `utf8` = 4 (the `i32` index into its dictionary).
+   * v2: `i64`/`timestamp` = 8, `date32` = 4.
+   */
   readonly size: number;
-  /** `viewOf` dtype for this column's *data* buffer (`utf8` → its `i32` indices). */
+  /**
+   * `viewOf` dtype for this column's *data* buffer (`utf8` → its `i32` indices).
+   * v2: `i64` → `'i64'` (`BigInt64Array`); `date32` → `'i32'`; `timestamp` → `'i64'`.
+   */
   readonly view: ViewDType;
   /** `TypedArray` constructor matching {@link view} (for staging copies). */
   readonly ctor: TypedArrayCtor;
-  /** Kernel-name dtype token (ABI §6). Equal to {@link name} for every v1 dtype. */
+  /**
+   * Kernel-name dtype token (ABI §6) — the **physical** dtype. Equal to
+   * {@link name} for every v1 dtype and for `i64`. **v2 (ADR-010): temporals
+   * diverge** — `date32` → `'i32'`, `timestamp` → `'i64'` — encoding the
+   * logical→physical registry that lets temporals reuse i32/i64 kernels.
+   */
   readonly wasm: string;
-  /** True for `f64`/`f32`: `NaN`/`±inf` are valid *values*, never nulls (dtypes.md §4). */
+  /** True for `f64`/`f32`: `NaN`/`±inf` are valid *values*, never nulls (dtypes.md §4). Integers (incl. `i64`, `date32`, `timestamp`) are `false`. */
   readonly float: boolean;
 }
 
@@ -237,18 +277,34 @@ export interface Column {
   readonly validityBitOffset: number;
   /** The shared dictionary for a `utf8` column; `null` for every other dtype. */
   readonly dict: Dictionary | null;
+  /**
+   * v2 (ADR-010): optional IANA timezone metadata for a `timestamp` column
+   * (e.g. `'America/New_York'`, `'UTC'`, `'+05:30'`). Stored values are **always
+   * UTC ms**; `tz` affects only display and tz-aware `dt` accessors (Arrow model),
+   * never the physical value. `null`/absent → UTC. Always `null` for every
+   * non-`timestamp` dtype (`date32` is tz-independent).
+   */
+  readonly tz?: string | null;
   /** True if this column owns its buffers (a root); a slice owns nothing. */
   readonly owned: boolean;
 }
 
-/** JS value shapes accepted by {@link createColumn}, per dtype. */
+/**
+ * JS value shapes accepted by {@link createColumn}, per dtype. v2 (ADR-009):
+ * `i64`/`timestamp` accept `bigint` or safe-integer `number` (a non-integer or
+ * out-of-safe-range `number` throws); `date32` accepts a `number` of days.
+ */
 export type ColumnInput =
   | ArrayLike<number | null | undefined>
   | ArrayLike<boolean | null | undefined>
-  | ArrayLike<string | null | undefined>;
+  | ArrayLike<string | null | undefined>
+  | ArrayLike<bigint | null | undefined>; // v2: i64 / timestamp
 
-/** One decoded column cell: a value, or `null` for a null slot. */
-export type Cell = number | boolean | string | null;
+/**
+ * One decoded column cell: a value, or `null` for a null slot. v2 (ADR-009):
+ * `i64`/`timestamp` cells are `bigint`.
+ */
+export type Cell = number | boolean | string | bigint | null;
 
 /**
  * Build a column from JS `values` for `dtype`. A matching `TypedArray` takes the

@@ -1,8 +1,10 @@
 # Status Ledger (Phase 0 → Phase 3)
 
-Maintained by the orchestrator (Fable). Subagents must not edit this file.
+Maintained by the orchestrator (Fable). Subagents must not edit this file (the v2
+lead seeds the v2 ledger below at commission; downstream v2 agents append notes via
+`bd`, not by editing this file).
 
-Last updated: 2026-07-02
+Last updated: 2026-07-03
 
 ## Task Registry
 
@@ -22,6 +24,23 @@ Last updated: 2026-07-02
 | dataframe-8aj.2 | P4.2 Independent adversarial verification | Sonnet | done | Full gate + bench matrix re-run green; regression harness injection PASS; 2 findings | See bead notes. **Findings:** (1) `withColumn_add_100k` baseline (0.0953 ms) flaky: 2/3 fresh Docker runs fail at 1.11× (threshold 1.10); sub-ms op is noise-sensitive. (2) `--update` has no dirty-tree guard (noted, not fixed). E2E reproduced: pipeline 3.72-3.79×, join 1.74-1.79×, sortValues 1.68-1.70×. 0 skipped tests; test diff additive only. |
 
 | dataframe-5am.2 | P6.F Release prep: README, typedoc, examples, packaging checks, publish dry-run | Sonnet | done | gate 877/877; publint clean; attw all-green (node10/node16/bundler); publish dry-run clean; node-quickstart PASS; vite build PASS; typedoc 1.7 MB; pack 385.7 KB / 19 files | CSV whitespace-as-f64 bug fixed; worker-script publint false-positive fixed via `require` alias; `typesVersions` added for node10 subpath; `sideEffects:false`; `private` removed; exports map split per import/require condition. |
+
+## v2 Ledger (Epic dataframe-dh9 — i64 / temporals / Parquet, target 0.2.0)
+
+Commissioned by Dylan 2026-07-02. Each of i64, temporals, and Parquet reverses a
+documented v1 non-goal, so each carries an ADR (ADR-009/010/011). Contract v2 deltas live
+in `contracts/dtypes.md` §6–§12, `contracts/wasm-abi.md` §10–§11, and `contracts/memory.d.ts`.
+
+| Bead ID | Task | Agent | Status | Depends on | Notes |
+|---|---|---|---|---|---|
+| dataframe-dh9.1 | v2.1 Contracts: ADR-009/010/011 + dtypes/wasm-abi/memory v2 deltas | v2 LEAD (Opus) | in-progress | — | ADR-009 (i64), ADR-010 (temporals), ADR-011 (parquet) accepted; `dtypes.md` §6–§12 (dtype rows, full v2 cast matrix incl. i64→f64 round / f64→i64 null / temporal reinterpret+scale w/ negative floor-div example, widening lattice, temporal-arith restriction, dt accessors ISO Mon=1..Sun=7); `wasm-abi.md` §10–§11 (i64 export list all 4 families + BigInt64 crossing + i64 reduction scratch/identity table + temporal reuse mapping, NO temporal wasm exports); `memory.d.ts` extended (tsc-clean). ADR-011 sizes measured (reader+writer subpath ≈29 KB gz). |
+| dataframe-dh9.2 | v2.2 Conformance fixtures: i64 + temporal cases (author/verify/fix) | TBD | open | dh9.1 | Must cover: wrapping overflow, i64→f64 >2^53 rounding, f64→i64 range→null, i64→i32/u32 wrap, div/mod zero→null, safe-int literal throw, negative timestamp→date32 floor, ISO weekday across a week (incl. pre-epoch), tz vs UTC accessor across DST, arith-restriction errors, Parquet in/out-of-profile. |
+| dataframe-dh9.3 | v2.3 i64 wasm kernels across all 4 families | TBD | blocked | dh9.1 | Implement `wasm-abi.md` §10 exports (both builds); SIMD `i64x2` for add/sub/neg/cmp, scalar mul/div/mod (§10.5); `hash_i64` = splitmix64. |
+| dataframe-dh9.4 | v2.4 i64 JS layer: registry, column, expr, frame | TBD | blocked | dh9.3 | `BigInt64Array` column path; bigint boundary; widening lattice in the expr compiler; i64 reductions return bigint. |
+| dataframe-dh9.5 | v2.5 Temporal layer: date32/timestamp, dt accessors, tz metadata | TBD | blocked | dh9.4 | Registry logical→physical token; restricted temporal algebra; JS-side dt accessors (civil-from-days + cached `Intl.DateTimeFormat`); scale-casts; `Column.tz`. No new wasm. |
+| dataframe-dh9.6 | v2.6 Arrow/CSV integration for i64+temporals | TBD | blocked | dh9.5 | Arrow `Int64`/`Date[DAY]`/`Timestamp[MILLI,tz]` round-trip; CSV typed inference for i64/dates. |
+| dataframe-dh9.7 | v2.7 Parquet subpath: `wispdf/parquet` reader+writer | TBD | blocked | dh9.5 | Subpath export (ADR-011); deps hyparquet + hyparquet-writer (snappy native); parquet-wasm devDep oracle; supported-profile errors; main entry stays dep-free ≤25 KB. |
+| dataframe-dh9.8 | v2.8 Release 0.2.0: docs, CHANGELOG, fresh-clone verify | TBD | blocked | dh9.6 | publint/attw incl. new subpath; README v2 dtypes; fresh-clone gate. |
 
 ## Gate Definitions
 
@@ -46,6 +65,9 @@ Last updated: 2026-07-02
 | ADR-006 | Parallelism is an opt-in shared-memory mode | accepted |
 | ADR-007 | Implementation language: **Rust** (decided by Phase 0 spike) | accepted |
 | ADR-008 | Stable kernel ABI | accepted |
+| ADR-009 | i64 / BigInt columns (reverses v1 non-goal) | accepted |
+| ADR-010 | Temporal dtypes: date32, timestamp, tz metadata (reverses v1 non-goal) | accepted |
+| ADR-011 | Parquet I/O via a scoped `wispdf/parquet` subpath (reverses v1 non-goal) | accepted |
 
 ## v2 Parking Lot
 
@@ -53,10 +75,10 @@ Features deferred from v1 scope (spec §10.4 + accumulated phase deferrals):
 
 | Feature | Notes / Blocker |
 |---|---|
-| i64 / BigInt columns | Requires wasm32 ABI extension; JS BigInt boundary overhead TBD |
-| Dates / timestamps / timezones | i64 encoding prerequisite; timezone DB size budget concern |
+| i64 / BigInt columns | **→ in progress (ADR-009, dh9.3–.4).** wasm32 `i64` native + `BigInt64Array` zero-copy view; BigInt cost only at scalar crossings. |
+| Dates / timestamps / timezones | **→ in progress (ADR-010, dh9.5).** date32=i32 days, timestamp=i64 UTC ms; tz = column metadata via platform `Intl` (no shipped tz DB); reuses i32/i64 kernels. |
 | Chunked / out-of-core columns | Requires Arrow Chunked Array layout change; lazy optimizer prerequisite |
-| Parquet I/O | Large binary format dependency; Arrow IPC covers the main use-case for v1 |
+| Parquet I/O | **→ in progress (ADR-011, dh9.7).** Scoped `wispdf/parquet` subpath (hyparquet + hyparquet-writer, ≈29 KB gz); main entry stays dep-free ≤25 KB. |
 | Lazy query optimizer | Requires logical plan representation; needed for predicate push-down and projection pruning |
 | wasm64 (> 4 GB memory) | Requires wasm64 target support in Rust + browser runtime support |
 | `utf8` col-vs-col compare | Kernel ABI requires unify_dict before comparison; wasm ABI §5 defers this to v2 |
