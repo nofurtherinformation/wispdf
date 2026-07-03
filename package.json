@@ -1,6 +1,6 @@
 {
   "name": "databonk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Columnar WASM dataframe library for JavaScript — pandas-familiar ergonomics, WebAssembly-accelerated kernels, dual ESM/CJS, TypeScript types.",
   "keywords": [
     "dataframe",
