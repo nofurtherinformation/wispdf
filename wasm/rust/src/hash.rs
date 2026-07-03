@@ -556,3 +556,59 @@ pub unsafe extern "C" fn hash_i64(
         };
     }
 }
+
+// ========================================================================
+// § utf8 dictionary hash kernel (v2.2) — wasm-abi.md §12
+// ========================================================================
+
+/// Hash raw UTF-8 bytes for each dictionary slot (ABI §12).
+///
+/// ## Hashing scheme: FNV-1a body with splitmix64 finalization
+///
+/// For each slot `k in 0..dict_count`:
+/// ```text
+///   bytes = bytes_buf[offsets[k] .. offsets[k+1])
+///   h     = FNV_OFFSET  (0xcbf29ce484222325)
+///   for each byte b in bytes: h = (h ^ b as u64).wrapping_mul(FNV_PRIME)
+///   out_hash[k] = splitmix64(h) as i64
+/// ```
+///
+/// **Empty string:** the loop never executes; `h` stays `FNV_OFFSET`.
+/// `splitmix64(FNV_OFFSET)` is non-zero because `splitmix64` is a bijection
+/// and its unique fixed point is `0` (verifiable: every multiply step maps
+/// `0 → 0`); `FNV_OFFSET ≠ 0` therefore its image is non-zero.
+///
+/// **H_NULL not involved:** row nullness lives in the row validity bitmap,
+/// not in dictionary hashes. If a slot's hash happened to equal H_NULL,
+/// null rows are still excluded by the validity check in `join_hash_*`, so
+/// there is no false-match risk (ABI §12; 2⁻⁶⁴ collision probability,
+/// same class as ADR-005).
+///
+/// ## Determinism
+///
+/// The byte loop is inherently sequential (no 64-bit SIMD multiply available
+/// in WASM SIMD128 — same rationale as `hash_dt`). Both scalar and SIMD builds
+/// execute the identical scalar loop and produce bit-identical outputs.
+#[no_mangle]
+pub unsafe extern "C" fn hash_utf8_dict(
+    offsets_ptr: *const i32,
+    bytes_ptr: *const u8,
+    dict_count: u32,
+    out_hash_ptr: *mut i64,
+) {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let dict_count = dict_count as usize;
+    for k in 0..dict_count {
+        let start = *offsets_ptr.add(k) as usize;
+        let end = *offsets_ptr.add(k + 1) as usize;
+        let mut h = FNV_OFFSET;
+        let mut j = start;
+        while j < end {
+            h ^= *bytes_ptr.add(j) as u64;
+            h = h.wrapping_mul(FNV_PRIME);
+            j += 1;
+        }
+        *out_hash_ptr.add(k) = splitmix64(h) as i64;
+    }
+}

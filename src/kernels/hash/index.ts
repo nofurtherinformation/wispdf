@@ -43,6 +43,14 @@ export interface HashExports {
   hash_f32(data: number, vp: number, outHash: number, len: number): void;
   /** `hash_i64(data, vp, out_hash, len) -> ()` — v2.3 i64 column hash. */
   hash_i64(data: number, vp: number, outHash: number, len: number): void;
+  /**
+   * `hash_utf8_dict(offsets_ptr, bytes_ptr, dict_count, out_hash_ptr) -> ()` — ABI §12.
+   *
+   * For each dictionary slot `k in 0..dict_count`, hashes the raw UTF-8 bytes
+   * `bytes[offsets[k]..offsets[k+1])` into `out_hash[k]` (i64).  No row validity
+   * is involved; row nullness is handled separately by the join validity bitmaps.
+   */
+  hash_utf8_dict(offsetsPtr: number, bytesPtr: number, dictCount: number, outHashPtr: number): void;
 
   // ── hash_combine ─────────────────────────────────────────────────────────
   /** `hash_combine(acc_hash, add_hash, len) -> ()` — in-place multi-key mix. */
