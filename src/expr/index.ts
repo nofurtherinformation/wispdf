@@ -27,6 +27,9 @@ export {
   type CompareOp,
   type BoolOp,
   type AggOp,
+  type StrOp,
+  StrProxy,
+  DtProxy,
 } from './ast.js';
 
 // Type resolution

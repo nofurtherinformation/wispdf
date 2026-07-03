@@ -318,6 +318,8 @@ function evalExpr(rt: Runtime, frame: FrameView, t: TExpr): Val {
     }
     case 'dt':
       return evalDt(rt, frame, t.component, t.operand);
+    case 'strSlice':
+      return evalStrSlice(rt, frame, t.operand, t.start, t.end);
   }
 }
 
@@ -832,6 +834,84 @@ function evalDt(rt: Runtime, frame: FrameView, c: DtComponent, t: TExpr): ColVal
   if (v.ownsDict && v.dict) freeDict(frame, v.dict);
 
   return colOf('i32', outPtr, v.validity, null, false);
+}
+
+// ── str.slice ─────────────────────────────────────────────────────────────────
+
+/**
+ * Evaluate `str.slice(start, end?)` on a utf8 column (dtypes.md §13).
+ *
+ * Algorithm (O(unique) + O(rows)):
+ *   1. Decode the source dictionary once (memoized — the TextDecoder boundary is crossed
+ *      at most once per unique string across all callers for this column's lifetime).
+ *   2. Apply `String.prototype.slice(start, end)` to each unique value.
+ *   3. Re-deduplicate the sliced values into a new result dictionary.  For a typical
+ *      census workload, ~85K unique GEOIDs collapse to ~50 state codes after slice(0,11).
+ *   4. Write a fresh wasm dictionary for those unique results.
+ *   5. Remap each row's index through the slot→result-slot map (O(rows) Int32Array writes).
+ *   6. Null rows: their index value is irrelevant; validity propagates unchanged.
+ *
+ * Never touches per-row string values — all string work is on dictionary slots.
+ */
+function evalStrSlice(
+  rt: Runtime,
+  frame: FrameView,
+  operandT: TExpr,
+  start: number,
+  end: number | undefined,
+): ColVal {
+  const col = evalNumericColumn(rt, frame, operandT);
+  const len = rt.len;
+
+  // Decode the source dictionary strings (memoized per slot via decodeSlot).
+  const srcStrings = col.dict ? decodeDictionary(frame.ctx, col.dict) : [];
+  const srcCount = srcStrings.length;
+
+  // --- Step 2+3: apply slice to each dict slot, re-dedup ---
+  // slotRemap[k] = result-dict slot for source slot k
+  const slotRemap = new Int32Array(srcCount);
+  const resultUniques: string[] = [];
+  const index = new Map<string, number>();
+
+  for (let k = 0; k < srcCount; k++) {
+    const sliced = end === undefined
+      ? srcStrings[k]!.slice(start)
+      : srcStrings[k]!.slice(start, end);
+    let j = index.get(sliced);
+    if (j === undefined) {
+      j = resultUniques.length;
+      resultUniques.push(sliced);
+      index.set(sliced, j);
+    }
+    slotRemap[k] = j;
+  }
+
+  // --- Step 4: write the new dictionary into wasm memory ---
+  // writeDictionary may grow memory (alloc inside), so do all allocs before taking views.
+  const newDict = writeDictionary(frame.ctx, resultUniques);
+  // Track for the runtime so rt.freeAll() can clean up on error paths.
+  rt.track(newDict.offsetsPtr, (newDict.count + 1) * 4, 'dict');
+  rt.track(newDict.bytesPtr, Math.max(newDict.bytesLen, 1), 'dict');
+
+  // --- Step 5: remap indices ---
+  // Allocate output buffer (may grow memory) BEFORE taking any views (ADR-001).
+  const outPtr = col.ownsData ? col.dataPtr : rt.alloc(len * 4, 'data');
+  // Take views only after all potential allocs.
+  const srcIdx = rt.view(col.dataPtr, len, 'i32') as Int32Array;
+  const dstIdx = rt.view(outPtr, len, 'i32') as Int32Array;
+
+  // Null rows: their index value is not meaningful (validity=0), but we still write
+  // a valid slot (0) so the buffer is fully initialised (dtypes.md §4.1).
+  // When outPtr === col.dataPtr (in-place), srcIdx and dstIdx alias the same buffer;
+  // reading srcIdx[i] before writing dstIdx[i] is safe (sequential, same index).
+  for (let i = 0; i < len; i++) {
+    dstIdx[i] = slotRemap[srcIdx[i]!]!;
+  }
+
+  if (outPtr !== col.dataPtr && col.ownsData) rt.free(col.dataPtr);
+  if (col.ownsDict) freeDict(frame, col.dict);
+
+  return colOf('utf8', outPtr, col.validity, newDict, true);
 }
 
 // ── Aggregations ──────────────────────────────────────────────────────────────

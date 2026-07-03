@@ -87,7 +87,9 @@ export type TExpr =
       operand: TExpr;
     }>
   /** dt accessor: extract a calendar field (result dtype = 'i32', dtypes.md §10). */
-  | Readonly<{ kind: 'dt'; component: DtComponent; dtype: 'i32'; operand: TExpr }>;
+  | Readonly<{ kind: 'dt'; component: DtComponent; dtype: 'i32'; operand: TExpr }>
+  /** str.slice: substring on dictionary values (result dtype = 'utf8', dtypes.md §13). */
+  | Readonly<{ kind: 'strSlice'; dtype: 'utf8'; operand: TExpr; start: number; end: number | undefined }>;
 
 /** `true` for a value dtype that participates in numeric arithmetic (dtypes.md §3.2). */
 const NUMERIC: ReadonlySet<DType> = new Set<DType>(['f64', 'f32', 'i32', 'u32', 'i64']);
@@ -172,6 +174,8 @@ function resolveNode(e: Expr, schema: Schema): TExpr {
       return resolveAgg(node.op, node.operand, schema);
     case 'dt':
       return resolveDt(node.component, node.operand, schema);
+    case 'strSlice':
+      return resolveStrSlice(node.operand, node.start, node.end, schema);
   }
 }
 
@@ -291,6 +295,21 @@ function resolveDt(component: DtComponent, operandE: Expr, schema: Schema): TExp
   if (!TEMPORAL.has(t.dtype)) throw unsupportedDtype('dt', t.dtype);
   // Result is always i32 (field value: year, month, day, etc.; dtypes.md §10).
   return { kind: 'dt', component, dtype: 'i32', operand: t };
+}
+
+// ── str namespace (dtypes.md §13) ─────────────────────────────────────────────
+
+function resolveStrSlice(
+  operandE: Expr,
+  start: number,
+  end: number | undefined,
+  schema: Schema,
+): TExpr {
+  const t = resolveNode(operandE, schema);
+  if (t.dtype !== 'utf8') {
+    throw unsupportedDtype('str.slice', t.dtype, `str namespace requires a utf8 column; got ${t.dtype}`);
+  }
+  return { kind: 'strSlice', dtype: 'utf8', operand: t, start, end };
 }
 
 // ── Comparisons (dtypes.md §4.1; exact-match except literal coercion) ──────────

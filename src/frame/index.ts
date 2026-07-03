@@ -9,7 +9,7 @@ export {
   type WithColumnOptions,
 } from './dataframe.js';
 
-export { Series } from './series.js';
+export { Series, SeriesStrProxy } from './series.js';
 
 export {
   GroupBy,

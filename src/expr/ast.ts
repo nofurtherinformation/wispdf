@@ -25,6 +25,9 @@ export type DtComponent =
   | 'year' | 'month' | 'day'
   | 'hour' | 'minute' | 'second' | 'millisecond'
   | 'weekday' | 'dayOfYear' | 'quarter';
+
+/** str namespace op names (dtypes.md §13). v1 has only 'slice'. */
+export type StrOp = 'slice';
 /** Comparison operators → boolean/mask (dtypes.md §4.1). */
 export type CompareOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne';
 /** Short-circuit-free three-valued boolean operators (dtypes.md §4.2). */
@@ -59,7 +62,12 @@ export type ExprNode =
   | Readonly<{ kind: 'cast'; operand: Expr; to: DType }>
   | Readonly<{ kind: 'agg'; op: AggOp; operand: Expr }>
   /** dt accessor: extract a calendar field from a date32 or timestamp column. */
-  | Readonly<{ kind: 'dt'; component: DtComponent; operand: Expr }>;
+  | Readonly<{ kind: 'dt'; component: DtComponent; operand: Expr }>
+  /**
+   * str.slice: substring via JS String.prototype.slice semantics (dtypes.md §13).
+   * Applied to dictionary values once (O(unique)), then indices remapped (O(rows)).
+   */
+  | Readonly<{ kind: 'strSlice'; operand: Expr; start: number; end: number | undefined }>;
 
 /** Anything accepted where an expression operand is expected. Raw scalars wrap to `lit`. */
 export type ExprLike = Expr | ScalarValue;
@@ -193,6 +201,15 @@ export class Expr {
     return new DtProxy(this);
   }
 
+  /**
+   * str namespace for `utf8` columns (dtypes.md §13).
+   * Returns a {@link StrProxy} with `.slice(start, end?)`.
+   * Throws a dtype error at compile time if the column is not `utf8`.
+   */
+  get str(): StrProxy {
+    return new StrProxy(this);
+  }
+
   /** Readable, unambiguous rendering for `console.log` / error messages. */
   toString(): string {
     return render(this.node);
@@ -215,6 +232,33 @@ export class DtProxy {
   weekday(): Expr { return dt('weekday', this.operand); }
   dayOfYear(): Expr { return dt('dayOfYear', this.operand); }
   quarter(): Expr { return dt('quarter', this.operand); }
+}
+
+/**
+ * str accessor proxy returned by `Expr.str`. Provides string operations over
+ * `utf8` columns; dtypes.md §13. A dtype error is raised at compile time (not
+ * here) if the parent expression is not `utf8`.
+ */
+export class StrProxy {
+  constructor(private readonly operand: Expr) {}
+
+  /**
+   * Substring via `JS String.prototype.slice` semantics (dtypes.md §13).
+   *
+   * - Negative `start`/`end`: count from the end of the string.
+   * - `end` omitted: slice to the end of the string.
+   * - Out-of-range indices clamp (same as JS).
+   * - Null rows propagate null.
+   * - UTF-16 code-unit indexing (same as every JS string API).
+   *   **Surrogate-pair caveat:** a supplementary character (emoji, CJK extension, etc.)
+   *   occupies two code units; `slice` may split a surrogate pair, producing an
+   *   unpaired surrogate (well-defined but unusual in JS, not valid UTF-8).
+   *   If you need grapheme-cluster or codepoint semantics, pre-process with JS before
+   *   loading into the frame.
+   */
+  slice(start: number, end?: number): Expr {
+    return new Expr({ kind: 'strSlice', operand: this.operand, start, end });
+  }
 }
 
 // ── leaf builders ───────────────────────────────────────────────────────────
@@ -295,5 +339,9 @@ function render(node: ExprNode): string {
       return `${render(node.operand.node)}.${node.op}()`;
     case 'dt':
       return `${render(node.operand.node)}.dt.${node.component}()`;
+    case 'strSlice':
+      return node.end === undefined
+        ? `${render(node.operand.node)}.str.slice(${node.start})`
+        : `${render(node.operand.node)}.str.slice(${node.start}, ${node.end})`;
   }
 }

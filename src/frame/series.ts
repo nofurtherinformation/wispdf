@@ -6,6 +6,12 @@ import { DTYPES, type DType } from '../memory/dtype.js';
 import { createColumn, columnToArray, type Cell, type Column } from '../memory/column.js';
 import type { ColumnView } from '../memory/views.js';
 import { extractComponents, type DtComponent } from '../temporal/vectorize.js';
+import {
+  writeDictionary,
+  decodeDictionary,
+  freeDictionary,
+} from '../memory/dictionary.js';
+import { getBit, validityBytes } from '../memory/bitmap.js';
 
 /** dt accessor components allowed for date32 columns (dtypes.md §10). */
 const DATE32_ALLOWED: ReadonlySet<DtComponent> = new Set<DtComponent>([
@@ -121,6 +127,89 @@ export class SeriesDtProxy {
   quarter(): Series     { return this.extract('quarter'); }
 }
 
+/**
+ * Series.str accessor proxy. Returned by `series.str`; provides string operations
+ * over `utf8` columns (dtypes.md §13). Throws TypeError if the column is not utf8.
+ */
+export class SeriesStrProxy {
+  constructor(private readonly series: Series) {}
+
+  /**
+   * Substring via `JS String.prototype.slice` semantics (dtypes.md §13).
+   *
+   * - Negative `start`/`end`: count from the end of the string.
+   * - `end` omitted: slice to the end of the string.
+   * - Out-of-range indices clamp (same as JS).
+   * - Null rows propagate null; the op never inspects null-row string values.
+   * - UTF-16 code-unit indexing.
+   *   **Surrogate-pair caveat:** a supplementary character occupies two code units;
+   *   `slice` may split a surrogate pair (well-defined in JS, unusual in UTF-8).
+   *
+   * Implementation: applied to dictionary values once (O(unique)), then indices
+   * remapped (O(rows)) — no per-row string work.
+   *
+   * Returns a new `utf8` Series.
+   */
+  slice(start: number, end?: number): Series {
+    const { dtype, col, name } = this.series;
+    const ctx = this.series['ctx'];
+    if (dtype !== 'utf8') {
+      throw new TypeError(
+        `str.slice requires a utf8 column, got ${dtype}.`,
+      );
+    }
+    const len = col.length;
+
+    // Decode source dictionary once (memoized per slot via decodeSlot).
+    const srcStrings = col.dict ? decodeDictionary(ctx, col.dict) : [];
+    const srcCount = srcStrings.length;
+
+    // Apply slice to each unique value; re-dedup into result uniques.
+    const slotRemap = new Int32Array(srcCount);
+    const resultUniques: string[] = [];
+    const index = new Map<string, number>();
+    for (let k = 0; k < srcCount; k++) {
+      const sliced = end === undefined
+        ? srcStrings[k]!.slice(start)
+        : srcStrings[k]!.slice(start, end);
+      let j = index.get(sliced);
+      if (j === undefined) {
+        j = resultUniques.length;
+        resultUniques.push(sliced);
+        index.set(sliced, j);
+      }
+      slotRemap[k] = j;
+    }
+
+    // Build output as a plain Cell array: remap each non-null row, propagate nulls.
+    // We use createColumn to encode the result dict (handles all wasm allocs cleanly).
+    const srcIdx = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: 'i32' }) as Int32Array;
+    const outValues: Array<string | null> = new Array(len);
+
+    if (col.validityPtr === 0) {
+      // All valid.
+      for (let i = 0; i < len; i++) {
+        outValues[i] = resultUniques[slotRemap[srcIdx[i]!]!]!;
+      }
+    } else {
+      // Propagate nulls.
+      const bitOff = col.validityBitOffset;
+      const vbytes = validityBytes(bitOff + len);
+      const vmap = ctx.viewOf({ ptr: col.validityPtr, length: vbytes, dtype: 'u8' }) as Uint8Array;
+      for (let i = 0; i < len; i++) {
+        if (getBit(vmap, bitOff + i)) {
+          outValues[i] = resultUniques[slotRemap[srcIdx[i]!]!]!;
+        } else {
+          outValues[i] = null;
+        }
+      }
+    }
+
+    const outCol = createColumn(ctx, 'utf8', outValues);
+    return new Series(ctx, `${name}.str.slice(${start}${end === undefined ? '' : `, ${end}`})`, outCol);
+  }
+}
+
 export class Series {
 
   readonly name: string;
@@ -173,6 +262,20 @@ export class Series {
       );
     }
     return new SeriesDtProxy(this);
+  }
+
+  /**
+   * str accessor namespace for `utf8` columns (dtypes.md §13).
+   * Returns a {@link SeriesStrProxy} with string methods.
+   * Throws TypeError if the column is not `utf8`.
+   */
+  get str(): SeriesStrProxy {
+    if (this.dtype !== 'utf8') {
+      throw new TypeError(
+        `str accessor requires a utf8 column, got ${this.dtype}.`,
+      );
+    }
+    return new SeriesStrProxy(this);
   }
 
   [Symbol.iterator](): IterableIterator<Cell> {
