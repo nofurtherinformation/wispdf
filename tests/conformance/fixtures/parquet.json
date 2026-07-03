@@ -1,0 +1,267 @@
+{
+  "family": "parquet",
+  "description": "v2 Parquet conformance fixtures for the wispdf/parquet subpath (ADR-011, bead dataframe-dh9.2). Two layer types: 'parquet_roundtrip' and 'parquet_error'. Round-trip cases define a wispdf DataFrame, write it with writeParquet(), read it back with readParquet(), and assert the columns match. The parquet-wasm devDep oracle validates in-profile write output and generates test files for out-of-profile error cases. All supported dtypes are covered (ADR-011 §supported-profile table). Error cases assert that readParquet() throws with a message matching 'error_pattern' as a substring — never a silent wrong result (ADR-011 §Consequences). Column data encoding follows the same conventions as i64.json/temporal.json: i64 values are decimal strings, f64/f32/i32/u32/bool are JSON numbers (0/1 for bool), utf8 are JSON strings or null. date32 is an i32 day count. timestamp is a decimal-string i64 epoch-ms. Null values are represented as JSON null.",
+  "oracle": "parquet-wasm",
+  "cases": [
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__f64_with_nulls",
+      "layer": "parquet_roundtrip",
+      "note": "Basic f64 column with one null value. Maps to Parquet DOUBLE physical type (ADR-011). Nulls round-trip via Parquet definition levels <-> validity bitmap. write_opts default = uncompressed.",
+      "frame": {
+        "columns": {
+          "x": { "dtype": "f64", "data": [1.5, null, -2.5, 0.0] }
+        },
+        "nrows": 4
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "x": { "dtype": "f64", "data": [1.5, null, -2.5, 0.0] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__i32",
+      "layer": "parquet_roundtrip",
+      "note": "i32 column (Parquet INT32 physical). No nulls — tests all-valid path.",
+      "frame": {
+        "columns": {
+          "n": { "dtype": "i32", "data": [0, 1, -1, 2147483647, -2147483648] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "n": { "dtype": "i32", "data": [0, 1, -1, 2147483647, -2147483648] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__u32",
+      "layer": "parquet_roundtrip",
+      "note": "u32 column maps to Parquet INT32 + INTEGER(bitWidth=32, signed=false) logical annotation (ADR-011). u32 max = 4294967295.",
+      "frame": {
+        "columns": {
+          "u": { "dtype": "u32", "data": [0, 1, 4294967295, null] }
+        },
+        "nrows": 4
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "u": { "dtype": "u32", "data": [0, 1, 4294967295, null] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__i64_with_nulls",
+      "layer": "parquet_roundtrip",
+      "note": "i64 column (Parquet INT64 physical). Values above 2^53 require i64 (not f64) to preserve precision. ADR-011.",
+      "frame": {
+        "columns": {
+          "id": { "dtype": "i64", "data": ["0", "9007199254740993", null, "-9223372036854775808", "9223372036854775807"] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "id": { "dtype": "i64", "data": ["0", "9007199254740993", null, "-9223372036854775808", "9223372036854775807"] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__bool_with_nulls",
+      "layer": "parquet_roundtrip",
+      "note": "bool column (Parquet BOOLEAN). Null bool is distinct from false. 0=false, 1=true in fixture encoding.",
+      "frame": {
+        "columns": {
+          "flag": { "dtype": "bool", "data": [1, 0, null, 1, 0] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "flag": { "dtype": "bool", "data": [1, 0, null, 1, 0] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__utf8_dict_encoded",
+      "layer": "parquet_roundtrip",
+      "note": "utf8 column maps to Parquet BYTE_ARRAY + STRING(UTF8), dictionary-encoded (ADR-011, ADR-002). Null utf8 rows must survive the definition-level round-trip.",
+      "frame": {
+        "columns": {
+          "s": { "dtype": "utf8", "data": ["hello", null, "world", "hello", null] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "s": { "dtype": "utf8", "data": ["hello", null, "world", "hello", null] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__date32",
+      "layer": "parquet_roundtrip",
+      "note": "date32 column maps to Parquet INT32 + DATE logical type (ADR-011). Values: 1969-12-31=-1, epoch=0, 2000-02-29=11016. Nulls survive.",
+      "frame": {
+        "columns": {
+          "d": { "dtype": "date32", "data": [-1, 0, 11016, null, 24855] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "d": { "dtype": "date32", "data": [-1, 0, 11016, null, 24855] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__timestamp_utc",
+      "layer": "parquet_roundtrip",
+      "note": "timestamp (no tz) maps to Parquet INT64 + TIMESTAMP(MILLIS, isAdjustedToUTC=true) (ADR-011). The tz metadata (null for UTC) must round-trip: output column has no tz. Epoch ms as decimal strings.",
+      "frame": {
+        "columns": {
+          "ts": { "dtype": "timestamp", "tz": null, "data": ["-86400000", "0", "951782400000", null, "2147483647000"] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "ts": { "dtype": "timestamp", "tz": null, "data": ["-86400000", "0", "951782400000", null, "2147483647000"] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__timestamp_with_tz",
+      "layer": "parquet_roundtrip",
+      "note": "timestamp with tz='America/Chicago': Parquet TIMESTAMP(MILLIS, isAdjustedToUTC=true); the tz string round-trips in logical-type or key_value_metadata (ADR-011). Physical values are UTC ms unchanged.",
+      "frame": {
+        "columns": {
+          "ts_chi": { "dtype": "timestamp", "tz": "America/Chicago", "data": ["1772956799000", "1772956800000", null] }
+        },
+        "nrows": 3
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "ts_chi": { "dtype": "timestamp", "tz": "America/Chicago", "data": ["1772956799000", "1772956800000", null] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__multi_dtype_frame",
+      "layer": "parquet_roundtrip",
+      "note": "Multi-column DataFrame covering the primary supported dtypes in one file. Exercises schema discovery, per-column definition levels, and correct column ordering on read. All 5 rows have at least one null in some column.",
+      "frame": {
+        "columns": {
+          "a_f64":  { "dtype": "f64",  "data": [1.0, null, 3.0, 4.0, 5.0] },
+          "b_i32":  { "dtype": "i32",  "data": [10, 20, null, 40, 50] },
+          "c_i64":  { "dtype": "i64",  "data": ["100", "200", "300", null, "500"] },
+          "d_bool": { "dtype": "bool", "data": [1, 0, 1, 0, null] },
+          "e_utf8": { "dtype": "utf8", "data": ["a", "b", "c", "d", null] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "a_f64":  { "dtype": "f64",  "data": [1.0, null, 3.0, 4.0, 5.0] },
+          "b_i32":  { "dtype": "i32",  "data": [10, 20, null, 40, 50] },
+          "c_i64":  { "dtype": "i64",  "data": ["100", "200", "300", null, "500"] },
+          "d_bool": { "dtype": "bool", "data": [1, 0, 1, 0, null] },
+          "e_utf8": { "dtype": "utf8", "data": ["a", "b", "c", "d", null] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_snappy",
+      "name": "parquet_roundtrip__snappy_compression",
+      "layer": "parquet_roundtrip",
+      "note": "Snappy is one of the two supported compression codecs (ADR-011). writeParquet with compression='snappy' must produce Parquet bytes that hyparquet can read back correctly. The parquet-wasm oracle also verifies the bytes.",
+      "frame": {
+        "columns": {
+          "x": { "dtype": "f64", "data": [1.0, 2.0, 3.0, null, 5.0] },
+          "s": { "dtype": "utf8", "data": ["foo", "bar", null, "baz", "qux"] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "snappy" },
+      "expected": {
+        "columns": {
+          "x": { "dtype": "f64", "data": [1.0, 2.0, 3.0, null, 5.0] },
+          "s": { "dtype": "utf8", "data": ["foo", "bar", null, "baz", "qux"] }
+        }
+      } },
+
+    { "group": "parquet_out_of_profile",
+      "name": "parquet_read__gzip_throws",
+      "layer": "parquet_error",
+      "note": "GZIP compression is explicitly out-of-profile (ADR-011 §supported-profile). The test runner uses the parquet-wasm oracle to write a Parquet file with GZIP-compressed columns, then calls readParquet() on it and expects a throw with 'unsupported' in the message. Never a silent wrong result.",
+      "generate_with_oracle": {
+        "compression": "gzip",
+        "data": { "x": { "dtype": "f64", "data": [1.0, 2.0, 3.0] } }
+      },
+      "error_pattern": "unsupported" },
+
+    { "group": "parquet_out_of_profile",
+      "name": "parquet_read__zstd_throws",
+      "layer": "parquet_error",
+      "note": "ZSTD compression is out-of-profile. Oracle generates a ZSTD-compressed file; readParquet() must throw.",
+      "generate_with_oracle": {
+        "compression": "zstd",
+        "data": { "x": { "dtype": "f64", "data": [1.0, 2.0] } }
+      },
+      "error_pattern": "unsupported" },
+
+    { "group": "parquet_out_of_profile",
+      "name": "parquet_read__int96_timestamp_throws",
+      "layer": "parquet_error",
+      "note": "INT96 timestamp (legacy Hive/Impala format) is explicitly out-of-profile (ADR-011). The oracle writes a Parquet file with an INT96 physical timestamp column; readParquet() must throw naming the unsupported type.",
+      "generate_with_oracle": {
+        "encoding": "INT96_timestamp",
+        "data": { "ts": { "dtype": "int96_ts", "data": ["2000-02-29T00:00:00Z"] } }
+      },
+      "error_pattern": "unsupported" },
+
+    { "group": "parquet_out_of_profile",
+      "name": "parquet_read__decimal_column_throws",
+      "layer": "parquet_error",
+      "note": "DECIMAL logical type is out-of-profile (ADR-011). The oracle writes a Parquet file with a DECIMAL column; readParquet() must throw.",
+      "generate_with_oracle": {
+        "encoding": "DECIMAL",
+        "data": { "d": { "dtype": "decimal", "precision": 10, "scale": 2, "data": ["12.34", "56.78"] } }
+      },
+      "error_pattern": "unsupported" },
+
+    { "group": "parquet_out_of_profile",
+      "name": "parquet_read__list_column_throws",
+      "layer": "parquet_error",
+      "note": "LIST (nested/repeated) columns are out-of-profile (ADR-011: 'nested/repeated (LIST/MAP/STRUCT) columns'). The oracle writes a Parquet file with a LIST<INT32> column; readParquet() must throw.",
+      "generate_with_oracle": {
+        "encoding": "LIST",
+        "data": { "arr": { "dtype": "list<i32>", "data": [[1, 2], [3], null] } }
+      },
+      "error_pattern": "unsupported" },
+
+    { "group": "parquet_out_of_profile",
+      "name": "parquet_write__invalid_codec_throws",
+      "layer": "parquet_error",
+      "op": "write",
+      "note": "writeParquet() with an unsupported compression codec string must throw a clear error. The test runner calls writeParquet(df, {compression: 'gzip'}) and asserts the throw. ADR-011 §API-shape: only 'snappy' and 'uncompressed' are accepted by writeParquet.",
+      "frame": {
+        "columns": { "x": { "dtype": "f64", "data": [1.0, 2.0] } },
+        "nrows": 2
+      },
+      "write_opts": { "compression": "gzip" },
+      "error_pattern": "unsupported" }
+
+  ]
+}
