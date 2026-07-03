@@ -12,7 +12,8 @@ export function formatCell(cell: Cell, dtype: DType): string {
   if (cell === null) return 'null';
   if (typeof cell === 'boolean') return cell ? 'true' : 'false';
   if (typeof cell === 'string') return cell.length > 24 ? `${cell.slice(0, 23)}${ELLIPSIS}` : cell;
-  if (typeof cell === 'bigint') return String(cell); // no 'n' suffix per spec
+  if (dtype === 'date32' && typeof cell === 'number') return new Date(cell * 86_400_000).toISOString().slice(0, 10);
+  if (typeof cell === 'bigint') return dtype === 'timestamp' ? new Date(Number(cell)).toISOString() : String(cell); // no 'n' suffix per spec
 
   if (Number.isNaN(cell)) return 'NaN';
   if (cell === Infinity) return 'inf';
@@ -24,6 +25,7 @@ export function formatCell(cell: Cell, dtype: DType): string {
   }
   return String(cell);
 }
+
 
 export function alignFor(dtype: DType): Align {
   return dtype === 'utf8' || dtype === 'bool' ? 'left' : 'right';

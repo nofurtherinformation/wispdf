@@ -13,8 +13,12 @@
 
 import type { ViewDType } from './views.js';
 
-/** The v2 column dtypes (`contracts/dtypes.md` §1). `utf8` is dict-encoded; `i64` uses BigInt64Array. */
-export type DType = 'f64' | 'f32' | 'i32' | 'u32' | 'bool' | 'utf8' | 'i64';
+/**
+ * The v2 column dtypes (`contracts/dtypes.md` §1/§6). `utf8` is dict-encoded; `i64` uses
+ * BigInt64Array. `date32` and `timestamp` are logical dtypes that dispatch to i32/i64 physical
+ * kernels respectively (ADR-010; `wasm` field carries the physical token).
+ */
+export type DType = 'f64' | 'f32' | 'i32' | 'u32' | 'bool' | 'utf8' | 'i64' | 'date32' | 'timestamp';
 
 /** `TypedArray` constructors a column data / auxiliary buffer can map to. */
 export type TypedArrayCtor =
@@ -53,6 +57,11 @@ export const DTYPES: Record<DType, DTypeInfo> = {
   utf8: { name: 'utf8', size: 4, view: 'i32', ctor: Int32Array, wasm: 'utf8', float: false },
   // `i64` is 8-byte signed 64-bit; maps to BigInt64Array; bigint at JS boundary (ADR-009).
   i64: { name: 'i64', size: 8, view: 'i64', ctor: BigInt64Array, wasm: 'i64', float: false },
+  // Logical temporals (ADR-010): physical storage is i32/i64; `wasm` token = physical kernel token.
+  // `date32`: days since 1970-01-01 UTC (proleptic Gregorian). Physical = i32. JS boundary = number.
+  date32: { name: 'date32', size: 4, view: 'i32', ctor: Int32Array, wasm: 'i32', float: false },
+  // `timestamp`: ms since 1970-01-01 UTC (always UTC; tz = display metadata only). Physical = i64. JS boundary = bigint.
+  timestamp: { name: 'timestamp', size: 8, view: 'i64', ctor: BigInt64Array, wasm: 'i64', float: false },
 };
 
 /** Descriptor for `dtype`. Throws on an unknown dtype (helpful for API callers). */

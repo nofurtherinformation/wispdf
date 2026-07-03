@@ -37,7 +37,7 @@ import {
 
 /** A column descriptor over wasm buffers (see module doc; ABI §4). */
 export interface Column {
-  /** Storage dtype (`contracts/dtypes.md` §1). */
+  /** Storage dtype (`contracts/dtypes.md` §1/§6). */
   readonly dtype: DType;
   /** Element count of this (possibly sliced) column. */
   readonly length: number;
@@ -51,6 +51,12 @@ export interface Column {
   readonly dict: Dictionary | null;
   /** True if this column owns its buffers (a root); slices share and own nothing. */
   readonly owned: boolean;
+  /**
+   * IANA timezone string for `timestamp` columns (ADR-010 §10 display/accessor metadata only).
+   * `undefined` = UTC. Not present for any other dtype. The stored value is always UTC epoch ms;
+   * tz only affects how dt accessors and the printer interpret the instant.
+   */
+  readonly tz?: string;
 }
 
 /** JS value shapes accepted by {@link createColumn}, per dtype. */
@@ -58,7 +64,8 @@ export type ColumnInput =
   | ArrayLike<number | null | undefined>
   | ArrayLike<bigint | number | null | undefined>
   | ArrayLike<boolean | null | undefined>
-  | ArrayLike<string | null | undefined>;
+  | ArrayLike<string | null | undefined>
+  | ArrayLike<Date | null | undefined>;
 
 /** One decoded column cell: a value, or `null` for a null slot. */
 export type Cell = number | bigint | boolean | string | null;
@@ -78,8 +85,9 @@ function root(
   dataPtr: number,
   validityPtr: number,
   dict: Dictionary | null,
+  tz?: string,
 ): Column {
-  return { dtype, length, dataPtr, validityPtr, validityBitOffset: 0, dict, owned: true };
+  return { dtype, length, dataPtr, validityPtr, validityBitOffset: 0, dict, owned: true, ...(tz !== undefined ? { tz } : {}) };
 }
 
 /**
@@ -88,8 +96,14 @@ function root(
  *     linear memory, `validityPtr = 0`;
  *   - **slow path** — a plain array: detect `null`/`undefined` (only these are
  *     nulls — a `NaN` is a *value*, dtypes.md §4) and build the validity bitmap.
+ *
+ * Temporal dtypes (ADR-010):
+ *   - `date32`: accepts `number` (days since epoch), `Int32Array` (fast path), or `Date` (→ day).
+ *   - `timestamp`: accepts `bigint`/safe-int number (ms since epoch), `BigInt64Array`, `Date` (→ ms),
+ *     or ISO-8601 string (only via explicit dtype). `toArray` returns `bigint` ms per dtypes.md §11.
+ * Optional `tz` attached as metadata for `timestamp` (display/accessor only, ADR-010).
  */
-export function createColumn(ctx: MemoryContext, dtype: DType, values: ColumnInput): Column {
+export function createColumn(ctx: MemoryContext, dtype: DType, values: ColumnInput, tz?: string): Column {
   if (dtype === 'utf8') {
     return createStringColumn(ctx, values as ArrayLike<string | null | undefined>);
   }
@@ -98,6 +112,9 @@ export function createColumn(ctx: MemoryContext, dtype: DType, values: ColumnInp
   }
   if (dtype === 'i64') {
     return createI64Column(ctx, values as ArrayLike<bigint | number | null | undefined>);
+  }
+  if (dtype === 'timestamp' || dtype === 'date32') {
+    return createTemporalColumn(ctx, dtype, values as ArrayLike<bigint | number | null | undefined>, tz);
   }
   return createNumericColumn(ctx, dtype, values as ArrayLike<number | null | undefined>);
 }
@@ -246,6 +263,36 @@ function createI64Column(
   return root('i64', len, dataPtr, validityPtr, null);
 }
 
+// ── Temporal column construction (ADR-010) ────────────────────────────────────
+
+/** Shared builder: date32 (i32 days) or timestamp (i64 ms). */
+function createTemporalColumn(
+  ctx: MemoryContext, dtype: 'timestamp' | 'date32',
+  values: ArrayLike<bigint | number | null | undefined>, tz?: string,
+): Column {
+  const ts = dtype === 'timestamp', sz = ts ? 8 : 4, len = values.length;
+  const vdt = ts ? 'i64' : 'i32';
+  if (ts ? values instanceof BigInt64Array : values instanceof Int32Array) {
+    const p = ctx.mod.alloc(Math.max(len * sz, 1));
+    (ctx.viewOf({ ptr: p, length: len, dtype: vdt }) as BigInt64Array | Int32Array).set(values as any);
+    return root(dtype, len, p, 0, null, tz);
+  }
+  let nulls = 0;
+  for (let i = 0; i < len; i++) if (isNullish(values[i])) nulls++;
+  const dP = ctx.mod.alloc(Math.max(len * sz, 1)), vP = nulls > 0 ? ctx.mod.alloc(validityBytes(len)) : 0;
+  const view = ctx.viewOf({ ptr: dP, length: len, dtype: vdt }) as BigInt64Array | Int32Array;
+  let vb: Uint8Array | null = null;
+  if (vP) { vb = ctx.viewOf({ ptr: vP, length: validityBytes(len), dtype: 'u8' }) as Uint8Array; vb.fill(0); }
+  for (let i = 0; i < len; i++) {
+    const v = values[i];
+    if (!isNullish(v)) {
+      (view as any)[i] = ts ? (typeof v === 'bigint' ? v : BigInt(v as number)) : (v as number);
+      if (vb) setBit(vb, i);
+    } else { (view as any)[i] = ts ? 0n : 0; }
+  }
+  return root(dtype, len, dP, vP, null, tz);
+}
+
 function createStringColumn(
   ctx: MemoryContext,
   values: ArrayLike<string | null | undefined>,
@@ -295,6 +342,11 @@ function createStringColumn(
  * Export a column back to a JS array, with null slots as `null` (deliverable §1).
  * `f64`/`f32` `NaN`s round-trip as values; `bool` yields `boolean`; `utf8` yields
  * memoized-decoded strings.
+ *
+ * Temporal boundary per dtypes.md §11:
+ *   - `date32`  → `number` (days since epoch), matching the physical i32 storage.
+ *   - `timestamp` → `bigint` (ms since epoch), matching the physical i64 storage.
+ * Use `Series.toDates()` for convenient `Date[]` conversion.
  */
 export function columnToArray(ctx: MemoryContext, col: Column): Cell[] {
   const { length, validityPtr, validityBitOffset } = col;
@@ -321,8 +373,18 @@ export function columnToArray(ctx: MemoryContext, col: Column): Cell[] {
     return out;
   }
 
-  if (col.dtype === 'i64') {
+  // i64 and timestamp both use BigInt64Array; boundary = bigint (dtypes.md §11/§6).
+  if (col.dtype === 'i64' || col.dtype === 'timestamp') {
     const data = ctx.viewOf({ ptr: col.dataPtr, length, dtype: 'i64' }) as BigInt64Array;
+    for (let i = 0; i < length; i++) {
+      out[i] = validity && !getBit(validity, validityBitOffset + i) ? null : data[i]!;
+    }
+    return out;
+  }
+
+  // date32 uses Int32Array; boundary = number (day count, dtypes.md §11/§6).
+  if (col.dtype === 'date32') {
+    const data = ctx.viewOf({ ptr: col.dataPtr, length, dtype: 'i32' }) as Int32Array;
     for (let i = 0; i < length; i++) {
       out[i] = validity && !getBit(validity, validityBitOffset + i) ? null : data[i]!;
     }
@@ -361,6 +423,7 @@ export function sliceColumn(col: Column, start: number, end: number): Column {
     validityBitOffset: col.validityBitOffset + s,
     dict: col.dict,
     owned: false, // a slice never owns the shared buffers
+    ...(col.tz !== undefined ? { tz: col.tz } : {}),  // propagate tz metadata for timestamp slices
   };
 }
 

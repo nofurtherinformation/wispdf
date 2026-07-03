@@ -19,6 +19,12 @@ import type { DType } from '../memory/dtype.js';
 
 /** Binary arithmetic operators (dtypes.md §3.1/§3.2). */
 export type ArithOp = 'add' | 'sub' | 'mul' | 'div' | 'mod';
+
+/** dt accessor field names (dtypes.md §10, ADR-010). */
+export type DtComponent =
+  | 'year' | 'month' | 'day'
+  | 'hour' | 'minute' | 'second' | 'millisecond'
+  | 'weekday' | 'dayOfYear' | 'quarter';
 /** Comparison operators → boolean/mask (dtypes.md §4.1). */
 export type CompareOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne';
 /** Short-circuit-free three-valued boolean operators (dtypes.md §4.2). */
@@ -51,7 +57,9 @@ export type ExprNode =
   | Readonly<{ kind: 'isNull'; operand: Expr }>
   | Readonly<{ kind: 'fillNull'; operand: Expr; value: ScalarValue }>
   | Readonly<{ kind: 'cast'; operand: Expr; to: DType }>
-  | Readonly<{ kind: 'agg'; op: AggOp; operand: Expr }>;
+  | Readonly<{ kind: 'agg'; op: AggOp; operand: Expr }>
+  /** dt accessor: extract a calendar field from a date32 or timestamp column. */
+  | Readonly<{ kind: 'dt'; component: DtComponent; operand: Expr }>;
 
 /** Anything accepted where an expression operand is expected. Raw scalars wrap to `lit`. */
 export type ExprLike = Expr | ScalarValue;
@@ -175,10 +183,38 @@ export class Expr {
     return agg('last', this);
   }
 
+  /**
+   * dt accessor namespace for date32 / timestamp columns (dtypes.md §10, ADR-010).
+   * Returns a {@link DtProxy} with `.year()`, `.month()`, `.day()`, `.hour()`,
+   * `.minute()`, `.second()`, `.millisecond()`, `.weekday()`, `.dayOfYear()`, `.quarter()`.
+   * Each method returns an `i32` Expr.
+   */
+  get dt(): DtProxy {
+    return new DtProxy(this);
+  }
+
   /** Readable, unambiguous rendering for `console.log` / error messages. */
   toString(): string {
     return render(this.node);
   }
+}
+
+/**
+ * dt accessor proxy returned by `Expr.dt`. Every method produces an `i32` Expr
+ * extracting the named calendar field from the parent date32 / timestamp column.
+ */
+export class DtProxy {
+  constructor(private readonly operand: Expr) {}
+  year(): Expr { return dt('year', this.operand); }
+  month(): Expr { return dt('month', this.operand); }
+  day(): Expr { return dt('day', this.operand); }
+  hour(): Expr { return dt('hour', this.operand); }
+  minute(): Expr { return dt('minute', this.operand); }
+  second(): Expr { return dt('second', this.operand); }
+  millisecond(): Expr { return dt('millisecond', this.operand); }
+  weekday(): Expr { return dt('weekday', this.operand); }
+  dayOfYear(): Expr { return dt('dayOfYear', this.operand); }
+  quarter(): Expr { return dt('quarter', this.operand); }
 }
 
 // ── leaf builders ───────────────────────────────────────────────────────────
@@ -209,6 +245,10 @@ function compare(op: CompareOp, left: Expr, right: ExprLike): Expr {
 
 function agg(op: AggOp, operand: Expr): Expr {
   return new Expr({ kind: 'agg', op, operand });
+}
+
+function dt(component: DtComponent, operand: Expr): Expr {
+  return new Expr({ kind: 'dt', component, operand });
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────
@@ -253,5 +293,7 @@ function render(node: ExprNode): string {
       return `${render(node.operand.node)}.cast(${node.to})`;
     case 'agg':
       return `${render(node.operand.node)}.${node.op}()`;
+    case 'dt':
+      return `${render(node.operand.node)}.dt.${node.component}()`;
   }
 }

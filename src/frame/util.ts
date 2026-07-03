@@ -7,10 +7,14 @@ import { validityBytes, getBit, setBit } from '../memory/bitmap.js';
 import type { Column } from '../memory/column.js';
 import type { Dictionary } from '../memory/dictionary.js';
 
+/**
+ * Kernel dtype token for sort/gather/filter.
+ * Temporal types route to their physical kernel token (ADR-010).
+ */
 export function storageToken(dtype: DType): string {
   if (dtype === 'bool') return 'u8';
   if (dtype === 'utf8') return 'i32';
-  return dtype;
+  return DTYPES[dtype].wasm; // date32→'i32', timestamp→'i64', others → unchanged
 }
 
 export interface AlignedValidity {
