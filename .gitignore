@@ -17,3 +17,4 @@ examples/*/public/*.wasm
 *.db
 .beads-credential-key
 .beads/proxieddb/
+*.tgz
