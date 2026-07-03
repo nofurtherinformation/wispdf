@@ -415,9 +415,9 @@ Source: [`bench/baselines/e2e-v1.json`](bench/baselines/e2e-v1.json).
 
 | Operation | wispdf (ms) | Arquero (ms) | Ratio |
 |---|---:|---:|---:|
-| filter → groupby → sum (pipeline) | 12.2 | 46.2 | **3.8× faster** |
-| join (inner, string key) | 70.1 | 122.1 | **1.7× faster** |
-| sortValues (f64, 1M rows) | 149.3 | 261.7 | **1.8× faster** |
+| filter → groupby → sum (pipeline) | 12.3 | 45.3 | **3.7× faster** |
+| join (inner, string key) | 68.6 | 120.6 | **1.8× faster** |
+| sortValues (f64, 1M rows) | 145.3 | 248.9 | **1.7× faster** |
 
 > **Caveats:** Arquero times include `.objects()` materialisation (that's what its
 > pipeline naturally produces); wispdf times do not materialise to JS objects.
@@ -431,21 +431,23 @@ comparisons misleading).
 ### i64 kernel performance (v2.3)
 
 Measured in Docker, Node v22.23.1, 1M elements, SIMD build.
-Source: `bench/kernels/i64.mjs`.
+Source: recorded run in [`bench/baselines/i64-threads-v1.txt`](bench/baselines/i64-threads-v1.txt) (`bench/kernels/i64.mjs`).
 
 | Operation | WASM (ops/s) | JS BigInt64Array (ops/s) | Ratio |
 |---|---:|---:|---:|
-| `add_i64` @1M (gate ≥ 1.5×) | 4 575 | 1 572 | **2.9× faster** |
-| `mul_i64` @1M | 4 317 | 1 546 | **2.8× faster** |
-| `hash_i64` @1M | 1 721 | 50 | **34.7× faster** |
+| `add_i64` @1M (gate ≥ 1.5×) | 4 447 | 1 555 | **2.9× faster** |
+| `mul_i64` @1M | 4 175 | 1 534 | **2.7× faster** |
+| `hash_i64` @1M | 1 724 | 50 | **34.6× faster** |
 
 ### Parallel mode (4 workers, 10M f64 elements)
 
+Source: recorded run in [`bench/baselines/i64-threads-v1.txt`](bench/baselines/i64-threads-v1.txt) (`bench/workers/threads-bench.mjs`).
+
 | Op | 1 thread (ms) | 4 workers (ms) | Speedup |
 |---|---:|---:|---:|
-| sum | 2.74 | 0.82 | 3.3× |
-| mean | 2.74 | 0.82 | 3.4× |
-| min | 4.38 | 1.24 | 3.5× |
+| sum | 2.72 | 0.81 | 3.3× |
+| mean | 2.75 | 0.80 | 3.4× |
+| min | 4.48 | 1.24 | 3.6× |
 
 See [docs/threads.md](docs/threads.md) for setup.
 

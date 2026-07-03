@@ -1,0 +1,38 @@
+# Recorded bench artifacts for README v2 tables (Docker, v22.23.1, 2026-07-03)
+
+== bench/kernels/i64.mjs ==
+
+=== i64 kernel benchmark results ===
+┌─────────┬──────────────────────────────┬──────────┬─────────────┐
+│ (index) │ name                         │ ops/s    │ avg (ms)    │
+├─────────┼──────────────────────────────┼──────────┼─────────────┤
+│ 0       │ 'wasm:simd add_i64 @1M'      │ '4446.7' │ '224.886'   │
+│ 1       │ 'wasm:scl  add_i64 @1M'      │ '3149.7' │ '317.494'   │
+│ 2       │ 'js   BigInt64Array add @1M' │ '1554.6' │ '643.240'   │
+│ 3       │ 'wasm:simd hash_i64 @1M'     │ '1723.7' │ '580.151'   │
+│ 4       │ 'wasm:scl  hash_i64 @1M'     │ '2158.4' │ '463.300'   │
+│ 5       │ 'js   BigInt splitmix64 @1M' │ '49.9'   │ '20049.822' │
+│ 6       │ 'wasm:simd mul_i64 @1M'      │ '4175.0' │ '239.521'   │
+│ 7       │ 'js   BigInt64Array mul @1M' │ '1533.8' │ '651.985'   │
+└─────────┴──────────────────────────────┴──────────┴─────────────┘
+
+add_i64:  wasm/js ratio = 2.86×  (gate ≥ 1.5×) ✓ PASS
+hash_i64: wasm/js ratio = 34.56×  (informational)
+
+== bench/workers/threads-bench.mjs ==
+
+== bench/workers/threads-bench.mjs (import fixed) ==
+
+Parallel-mode bench  N=10,000,000 f64 elements (80 MB)
+
+Op         | 1-thread ms | 1-worker ms | 4-worker ms | 1t→4w ratio | Gate ≥1.8×
+-----------|-------------|-------------|-------------|-------------|----------
+sum        |        2.72 |        2.81 |        0.81 |        3.34 | PASS
+mean       |        2.75 |        2.77 |        0.80 |        3.44 | PASS
+min        |        4.48 |        4.45 |        1.24 |        3.61 | PASS
+
+--- Summary ---
+All ops meet the ≥1.8× gate on 4 workers.
+
+Note: f64 sum/mean parallel results are NOT bit-identical to single-thread
+(different FP accumulation order). See docs/threads.md §"Floating-point deviation".
