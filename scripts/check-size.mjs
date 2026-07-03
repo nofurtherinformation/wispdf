@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Size gate per spec §5:
- *   - Gzipped JS entry (dist/index.js or dist/index.cjs, whichever is larger) must be ≤ 25 KB
+ *   - Gzipped JS entry (dist/index.js or dist/index.cjs, whichever is larger) must be ≤ 30 KB (ADR-012)
  *   - Any dist/*.wasm must be ≤ 75 KB gzipped
  *
  * Exits 1 if any limit is exceeded.
@@ -12,7 +12,7 @@ import { resolve, join } from 'path';
 import { gzipSync } from 'zlib';
 
 const DIST = resolve(process.cwd(), 'dist');
-const JS_LIMIT_BYTES = 25 * 1024;   // 25 KB
+const JS_LIMIT_BYTES = 30 * 1024;   // 30 KB (v2 surface, ADR-012; was 25 KB for the v1 profile)
 const WASM_LIMIT_BYTES = 75 * 1024; // 75 KB
 
 let failed = false;
