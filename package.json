@@ -48,11 +48,26 @@
         "types": "./dist/workers.d.cts",
         "default": "./dist/workers.cjs"
       }
+    },
+    "./parquet": {
+      "import": {
+        "types": "./dist/parquet.d.ts",
+        "default": "./dist/parquet.js"
+      },
+      "require": {
+        "types": "./dist/parquet.d.cts",
+        "default": "./dist/parquet.cjs"
+      }
     }
   },
   "typesVersions": {
     "*": {
-      "workers": ["./dist/workers.d.ts"]
+      "workers": [
+        "./dist/workers.d.ts"
+      ],
+      "parquet": [
+        "./dist/parquet.d.ts"
+      ]
     }
   },
   "files": [
@@ -75,12 +90,17 @@
     "check:attw": "attw wispdf-0.1.0.tgz",
     "prepack": "npm run build"
   },
+  "dependencies": {
+    "hyparquet": "1.26.2",
+    "hyparquet-writer": "0.16.1"
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.4",
     "apache-arrow": "^21.1.0",
     "arquero": "^8.0.3",
     "danfojs": "^1.2.0",
     "fast-check": "^3.22.0",
+    "parquet-wasm": "0.7.2",
     "publint": "^0.3.0",
     "tinybench": "^2.9.0",
     "tsup": "^8.3.0",

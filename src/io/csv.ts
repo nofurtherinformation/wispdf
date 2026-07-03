@@ -272,6 +272,10 @@ function parseCell(cell: string, dtype: DType, nullSet: Set<string>): Cell {
       return cell.toLowerCase() === 'true';
     case 'utf8':
       return cell;
+    default:
+      // i64 / date32 / timestamp are not produced by CSV inference (v2 dtypes);
+      // this path is unreachable in practice but satisfies the return-type check.
+      return null;
   }
 }
 
