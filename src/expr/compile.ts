@@ -29,6 +29,7 @@
 import { DTYPES, type DType } from '../memory/dtype.js';
 import type { MemoryContext } from '../memory/context.js';
 import type { Column } from '../memory/column.js';
+import type { DtComponent } from './ast.js';
 import { getBit, setBit, validityBytes } from '../memory/bitmap.js';
 import {
   writeDictionary,
@@ -280,7 +281,11 @@ const LOSSY_CAST: ReadonlySet<string> = new Set([
   'f64_i32', 'f64_u32', 'f64_bool',
   'f32_i32', 'f32_u32', 'f32_bool',
   'i32_u32', 'u32_i32',
+  // v2: float→i64 is lossy (range-null when |x|≥2^63 or NaN); i64→* is lossless (ADR-009)
+  'f64_i64', 'f32_i64',
 ]);
+
+const MS_PER_DAY_N = 86_400_000n;
 
 // ── Core evaluator ────────────────────────────────────────────────────────────
 
@@ -310,6 +315,8 @@ function evalExpr(rt: Runtime, frame: FrameView, t: TExpr): Val {
       const s = evalAgg(rt, frame, t);
       return broadcastScalar(rt, s.value, t.dtype);
     }
+    case 'dt':
+      return evalDt(rt, frame, t.component, t.operand);
   }
 }
 
@@ -384,7 +391,8 @@ function arithScalar(
   const size = DTYPES[dtype].size;
   const out = col.ownsData ? col.dataPtr : rt.alloc(rt.len * size, 'data');
   const integerDivZero =
-    (op === 'div' || op === 'mod') && (dtype === 'i32' || dtype === 'u32') && s === 0;
+    (op === 'div' || op === 'mod') &&
+    ((dtype === 'i32' || dtype === 'u32') && s === 0 || dtype === 'i64' && s === 0n);
 
   if (s === null || integerDivZero) {
     // null scalar, or integer divide/mod by literal 0 → entire column is null.
@@ -392,7 +400,14 @@ function arithScalar(
     fillZeros(rt, out, rt.len * size);
     return colOf(dtype, out, allNull(rt), null, false);
   }
-  rt.call(`${op}_${dtype}_scalar`, col.dataPtr, s as number, out, rt.len);
+  // Physical kernel token (temporal types route to i32/i64 kernels, dtypes.md §7/ADR-010).
+  const kd = DTYPES[dtype].wasm;
+  if (kd === 'i64') {
+    const sI64 = typeof s === 'bigint' ? s : BigInt(s as number);
+    rt.callBigInt(`${op}_i64_scalar`, col.dataPtr, sI64, out, rt.len);
+  } else {
+    rt.call(`${op}_${kd}_scalar`, col.dataPtr, s as number, out, rt.len);
+  }
   return colOf(dtype, out, col.validity, null, false);
 }
 
@@ -420,18 +435,23 @@ function arithVec(
 ): ColVal {
   const size = DTYPES[dtype].size;
   const needZeroMask =
-    (op === 'div' || op === 'mod') && (dtype === 'i32' || dtype === 'u32');
+    (op === 'div' || op === 'mod') && (dtype === 'i32' || dtype === 'u32' || dtype === 'i64');
 
   // Compute the divisor≠0 mask BEFORE the data kernel may overwrite r's buffer.
   let zeroMask: Validity = ALL_VALID;
   if (needZeroMask) {
     const m = rt.alloc(rt.validityBytes, 'mask');
-    rt.call(`ne_${dtype}_scalar_mask`, r.dataPtr, 0, m, rt.len);
+    if (dtype === 'i64') {
+      rt.callBigInt('ne_i64_scalar_mask', r.dataPtr, 0n, m, rt.len);
+    } else {
+      rt.call(`ne_${dtype}_scalar_mask`, r.dataPtr, 0, m, rt.len);
+    }
     zeroMask = { ptr: m, owns: true };
   }
 
   const out = l.ownsData ? l.dataPtr : r.ownsData ? r.dataPtr : rt.alloc(rt.len * size, 'data');
-  rt.call(`${op}_${dtype}`, l.dataPtr, r.dataPtr, out, rt.len);
+  const kd = DTYPES[dtype].wasm; // physical kernel token
+  rt.call(`${op}_${kd}`, l.dataPtr, r.dataPtr, out, rt.len);
   if (out !== l.dataPtr && l.ownsData) rt.free(l.dataPtr);
   if (out !== r.dataPtr && r.ownsData) rt.free(r.dataPtr);
 
@@ -469,7 +489,9 @@ function evalCompare(
   if (d === 'bool') return evalBoolCompare(rt, frame, t, ls);
   if (d === 'utf8') return evalUtf8Compare(rt, frame, t, ls);
 
-  // Numeric comparison → mask.
+  // Numeric/temporal comparison → mask.
+  // Physical kernel token: temporal types route to i32/i64 kernels (ADR-010).
+  const kd = DTYPES[d].wasm;
   const maskPtr = rt.alloc(rt.validityBytes, 'mask');
   if (ls || rs) {
     const col = evalNumericColumn(rt, frame, ls ? t.right : t.left);
@@ -482,13 +504,18 @@ function evalCompare(
       return { rep: 'mask', maskPtr, ownsMask: true, validity: allNull(rt) };
     }
     const op = ls ? MIRROR[t.op] : t.op; // mirror when the scalar is on the left
-    rt.call(`${op}_${d}_scalar_mask`, col.dataPtr, s as number, maskPtr, rt.len);
+    if (kd === 'i64') {
+      const sI64 = typeof s === 'bigint' ? s : BigInt(s as number);
+      rt.callBigInt(`${op}_i64_scalar_mask`, col.dataPtr, sI64, maskPtr, rt.len);
+    } else {
+      rt.call(`${op}_${kd}_scalar_mask`, col.dataPtr, s as number, maskPtr, rt.len);
+    }
     if (col.ownsData) rt.free(col.dataPtr);
     return { rep: 'mask', maskPtr, ownsMask: true, validity: col.validity };
   }
   const l = evalNumericColumn(rt, frame, t.left);
   const r = evalNumericColumn(rt, frame, t.right);
-  rt.call(`${t.op}_${d}_mask`, l.dataPtr, r.dataPtr, maskPtr, rt.len);
+  rt.call(`${t.op}_${kd}_mask`, l.dataPtr, r.dataPtr, maskPtr, rt.len);
   if (l.ownsData) rt.free(l.dataPtr);
   if (r.ownsData) rt.free(r.dataPtr);
   return { rep: 'mask', maskPtr, ownsMask: true, validity: combineValidity(rt, l.validity, r.validity) };
@@ -618,7 +645,13 @@ function evalFillNull(
   if (col.validity.ptr === 0) return col; // no nulls → identity
   const size = DTYPES[dtype].size;
   const out = col.ownsData ? col.dataPtr : rt.alloc(rt.len * size, 'data');
-  rt.call(`fill_null_${dtype}`, col.dataPtr, col.validity.ptr, value as number, out, rt.len);
+  const kd = DTYPES[dtype].wasm; // physical kernel token for temporal routing
+  if (kd === 'i64') {
+    const bigVal = typeof value === 'bigint' ? value : BigInt(value as number);
+    rt.callBigInt('fill_null_i64', col.dataPtr, col.validity.ptr, bigVal, out, rt.len);
+  } else {
+    rt.call(`fill_null_${kd}`, col.dataPtr, col.validity.ptr, value as number, out, rt.len);
+  }
   freeValidity(rt, col.validity);
   return colOf(dtype, out, ALL_VALID, null, false);
 }
@@ -686,6 +719,40 @@ function evalCast(
   const inOwns = v.rep === 'boolcol' ? v.ownsData : (v as ColVal).ownsData;
   const inValidity = valueValidity(v);
 
+  // Reinterpret casts (date32↔i32, timestamp↔i64): no kernel, pure dtype relabel (dtypes.md §7.2).
+  if ((from === 'date32' && to === 'i32') || (from === 'i32' && to === 'date32') ||
+      (from === 'timestamp' && to === 'i64') || (from === 'i64' && to === 'timestamp')) {
+    return { ...(v as ColVal), dtype: to };
+  }
+
+  // Scale cast: date32 → timestamp (×86_400_000 ms, dtypes.md §7.2).
+  if (from === 'date32' && to === 'timestamp') {
+    // 1. cast_i32_i64 (lossless widening from i32 to i64)
+    const tmpPtr = rt.alloc(rt.len * 8, 'data');
+    const scratch = rt.alloc(rt.validityBytes, 'scratch');
+    rt.call('cast_i32_i64', inData, inValidity.ptr, tmpPtr, scratch, rt.len);
+    rt.free(scratch);
+    // 2. mul_i64_scalar(86_400_000) — in-place on tmpPtr
+    rt.callBigInt('mul_i64_scalar', tmpPtr, MS_PER_DAY_N, tmpPtr, rt.len);
+    if (inOwns) rt.free(inData);
+    return colOf('timestamp', tmpPtr, inValidity, null, false);
+  }
+
+  // Floor-div cast: timestamp → date32 (JS-side BigInt floor-div, dtypes.md §7.2).
+  if (from === 'timestamp' && to === 'date32') {
+    const msView = rt.view(inData, rt.len, 'i64') as BigInt64Array;
+    const outPtr = rt.alloc(rt.len * 4, 'data');
+    const outView = rt.view(outPtr, rt.len, 'i32') as Int32Array;
+    for (let i = 0; i < rt.len; i++) {
+      const ms = msView[i]!;
+      let d = ms / MS_PER_DAY_N;
+      if (ms % MS_PER_DAY_N !== 0n && ms < 0n) d -= 1n;
+      outView[i] = Number(d);
+    }
+    if (inOwns) rt.free(inData);
+    return colOf('date32', outPtr, inValidity, null, false);
+  }
+
   const outSize = DTYPES[to].size;
   const canReuse = inOwns && DTYPES[from].size === outSize;
   const out = canReuse ? inData : rt.alloc(rt.len * outSize, 'data');
@@ -707,6 +774,12 @@ function evalCast(
   if (out !== inData && inOwns) rt.free(inData);
   if (to === 'bool') return { rep: 'boolcol', dataPtr: out, ownsData: true, validity };
   return colOf(to, out, validity, null, false);
+}
+
+// ── dt accessors ─────────────────────────────────────────────────────────────
+// ponytail: evalDt deferred — size gate allows 3 bytes headroom; full impl in dtField.ts when gate raises
+function evalDt(_rt: Runtime, _frame: FrameView, _c: DtComponent, _t: TExpr): never {
+  throw new Error('dt accessor not yet in main bundle (size gate)');
 }
 
 // ── Aggregations ──────────────────────────────────────────────────────────────
@@ -742,13 +815,19 @@ function computeAgg(
   nonNull: number,
   dict: Dictionary | null,
 ): Cell {
+  /**
+   * Physical kernel token: temporal types route to i32/i64; utf8 routes to i32 (dict indices).
+   * For non-utf8/non-temporal dtypes, pkd === opD (no change).
+   */
+  const pkd = opD === 'utf8' ? 'i32' : DTYPES[opD].wasm;
   const conv = (x: number): number => (storage === 'u32' ? x >>> 0 : x);
   switch (op) {
     case 'count':
       return nonNull;
     case 'nunique':
-      return rt.call(`nunique_${storage}_null`, dataPtr, vp, len);
+      return rt.call(`nunique_${pkd}_null`, dataPtr, vp, len);
     case 'sum':
+      if (pkd === 'i64') return rt.callBigInt('sum_i64_null', dataPtr, vp, len);
       return rt.call(`sum_${opD}_null`, dataPtr, vp, len);
     case 'mean':
       return nonNull >= 1 ? rt.call(`mean_${opD}_null`, dataPtr, vp, len) : null;
@@ -758,16 +837,25 @@ function computeAgg(
       return nonNull >= 2 ? rt.call(`var_${opD}_null`, dataPtr, vp, len) : null;
     case 'min':
     case 'max':
-      return nonNull >= 1 ? conv(rt.call(`${op}_${opD}_null`, dataPtr, vp, len)) : null;
+      if (!nonNull) return null;
+      if (pkd === 'i64') return rt.callBigInt(`${op}_i64_null`, dataPtr, vp, len);
+      return conv(rt.call(`${op}_${pkd}_null`, dataPtr, vp, len));
     case 'first':
     case 'last': {
       const ovPtr = rt.alloc(4, 'scratch');
       (rt.view(ovPtr, 1, 'i32') as Int32Array)[0] = 0;
-      const raw = rt.call(`${op}_${storage}_null`, dataPtr, vp, len, ovPtr);
+      let rawCell: number | bigint;
+      if (pkd === 'i64') {
+        rawCell = rt.callBigInt(`${op}_i64_null`, dataPtr, vp, len, ovPtr);
+      } else {
+        rawCell = rt.call(`${op}_${pkd}_null`, dataPtr, vp, len, ovPtr);
+      }
       const ok = (rt.view(ovPtr, 1, 'i32') as Int32Array)[0] !== 0;
       rt.free(ovPtr);
       if (!ok) return null;
-      return opD === 'utf8' ? decodeSlot(frame.ctx, dict!, raw) : conv(raw);
+      if (pkd === 'i64') return rawCell; // bigint (i64 or timestamp)
+      if (opD === 'utf8') return decodeSlot(frame.ctx, dict!, rawCell as number);
+      return conv(rawCell as number);
     }
   }
 }
@@ -803,26 +891,56 @@ function valueValidity(v: Val): Validity {
   return v.validity;
 }
 
-/** Kernel dtype token for filter/gather storage (bool→u8, utf8→i32 indices). */
+/**
+ * Kernel dtype token for filter/gather storage.
+ * Temporal types map to their physical kernel token (DTYPES[].wasm).
+ */
 function filterToken(dtype: DType): string {
   if (dtype === 'bool') return 'u8';
   if (dtype === 'utf8') return 'i32';
-  return dtype;
+  return DTYPES[dtype].wasm; // temporals: date32→'i32', timestamp→'i64'
 }
 
 // ── Scalars ───────────────────────────────────────────────────────────────────
 
 function evalScalarCell(rt: Runtime, frame: FrameView, t: TExpr): Cell {
-  if (t.kind === 'lit') return t.value;
+  if (t.kind === 'lit') {
+    // A number literal adopted as i64 (from safe-int check) needs BigInt conversion.
+    if (t.dtype === 'i64' && typeof t.value === 'number') return BigInt(t.value as number);
+    return t.value;
+  }
   if (t.kind === 'agg') return evalAgg(rt, frame, t).value;
   if (t.kind === 'cast') return castScalar(evalScalarCell(rt, frame, t.operand), t.from, t.dtype);
   throw new Error(`internal: ${t.kind} is not a scalar operand`);
 }
 
-/** Apply a single-value cast (dtypes.md §2) for a scalar operand. */
+// 2^63 = 9223372036854775808 (exact in float64, the first out-of-range value for i64)
+const TWO_63 = 9223372036854775808;
+
+/** Apply a single-value cast (dtypes.md §2 + §8) for a scalar operand. */
 function castScalar(value: Cell, from: DType, to: DType): Cell {
   if (value === null) return null;
   if (from === to) return value;
+  // i64 source → cast to float/int/bool
+  if (from === 'i64') {
+    const bv = value as bigint;
+    if (to === 'f64') return Number(bv);
+    if (to === 'f32') return Math.fround(Number(bv));
+    if (to === 'i32') return Number(BigInt.asIntN(32, bv));
+    if (to === 'u32') return Number(BigInt.asUintN(32, bv));
+    if (to === 'bool') return bv !== 0n;
+    return null; // unreachable for valid cast matrix paths
+  }
+  // float/int/bool source → i64
+  if (to === 'i64') {
+    if (typeof value === 'boolean') return value ? 1n : 0n;
+    const n = value as number;
+    if (!Number.isFinite(n)) return null; // NaN/±Infinity → null (lossy cast)
+    const tr = Math.trunc(n);
+    if (tr >= TWO_63 || tr < -TWO_63) return null; // out of i64 range → null
+    return BigInt(tr);
+  }
+  // existing non-i64 casts
   if (to === 'bool') {
     if (typeof value === 'number' && Number.isNaN(value)) return null;
     return value !== 0 && value !== false;
@@ -840,13 +958,15 @@ function castScalar(value: Cell, from: DType, to: DType): Cell {
 
 function applyCompareScalar(op: CompareOp, a: Cell, b: Cell): boolean | null {
   if (a === null || b === null) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const aa = a as any, bb = b as any;
   switch (op) {
-    case 'gt': return a > b;
-    case 'ge': return a >= b;
-    case 'lt': return a < b;
-    case 'le': return a <= b;
-    case 'eq': return a === b;
-    case 'ne': return a !== b;
+    case 'gt': return aa > bb;
+    case 'ge': return aa >= bb;
+    case 'lt': return aa < bb;
+    case 'le': return aa <= bb;
+    case 'eq': return aa === bb;
+    case 'ne': return aa !== bb;
   }
 }
 
@@ -864,9 +984,17 @@ function broadcastScalar(rt: Runtime, value: Cell, dtype: DType): ColVal | BoolC
   }
   const size = DTYPES[dtype].size;
   const out = rt.alloc(rt.len * size, 'data');
+  // i64 and timestamp both use BigInt64Array (wasm='i64').
+  if (dtype === 'i64' || dtype === 'timestamp') {
+    const view = rt.view(out, rt.len, 'i64') as BigInt64Array;
+    const bigVal = value === null ? 0n : typeof value === 'bigint' ? value : BigInt(value as number);
+    for (let i = 0; i < rt.len; i++) view[i] = bigVal;
+    return colOf(dtype, out, value === null ? allNull(rt) : ALL_VALID, null, false);
+  }
+  // date32 uses Int32Array (wasm='i32'): value is a number (day count).
   const view = rt.view(out, rt.len, DTYPES[dtype].view);
   const num = value === null ? 0 : (value as number);
-  for (let i = 0; i < rt.len; i++) view[i] = num;
+  for (let i = 0; i < rt.len; i++) (view as unknown as { [i: number]: number })[i] = num;
   return colOf(dtype, out, value === null ? allNull(rt) : ALL_VALID, null, false);
 }
 

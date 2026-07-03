@@ -27,6 +27,7 @@ import {
   type CompareOp,
   type BoolOp,
   type AggOp,
+  type DtComponent,
   type ScalarValue,
 } from './ast.js';
 import {
@@ -84,12 +85,16 @@ export type TExpr =
       dtype: DType;
       operandDtype: DType;
       operand: TExpr;
-    }>;
+    }>
+  /** dt accessor: extract a calendar field (result dtype = 'i32', dtypes.md §10). */
+  | Readonly<{ kind: 'dt'; component: DtComponent; dtype: 'i32'; operand: TExpr }>;
 
-/** `true` for a value dtype that participates in arithmetic (dtypes.md §3.2). */
-const NUMERIC: ReadonlySet<DType> = new Set<DType>(['f64', 'f32', 'i32', 'u32']);
-const INTEGER: ReadonlySet<DType> = new Set<DType>(['i32', 'u32']);
+/** `true` for a value dtype that participates in numeric arithmetic (dtypes.md §3.2). */
+const NUMERIC: ReadonlySet<DType> = new Set<DType>(['f64', 'f32', 'i32', 'u32', 'i64']);
+const INTEGER: ReadonlySet<DType> = new Set<DType>(['i32', 'u32', 'i64']);
 const FLOAT: ReadonlySet<DType> = new Set<DType>(['f64', 'f32']);
+/** Logical temporal dtypes (ADR-010). NOT in NUMERIC; use restricted algebra (dtypes.md §9). */
+const TEMPORAL: ReadonlySet<DType> = new Set<DType>(['date32', 'timestamp']);
 
 function isNumeric(d: DType): boolean {
   return NUMERIC.has(d);
@@ -139,8 +144,9 @@ function resolveNode(e: Expr, schema: Schema): TExpr {
       return { kind: 'col', name: node.name, dtype: dt };
     }
     case 'lit': {
-      // A bare numeric literal with no sibling context defaults: int→i32, frac→f64.
+      // A bare literal with no sibling context defaults: bigint→i64, int→i32, frac→f64.
       if (node.dtype !== null) return litTExpr(node.value, node.dtype);
+      if (typeof node.value === 'bigint') return litTExpr(node.value, 'i64');
       if (typeof node.value === 'number') {
         return litTExpr(node.value, Number.isInteger(node.value) ? 'i32' : 'f64');
       }
@@ -164,6 +170,8 @@ function resolveNode(e: Expr, schema: Schema): TExpr {
       return resolveCast(node.operand, node.to, schema);
     case 'agg':
       return resolveAgg(node.op, node.operand, schema);
+    case 'dt':
+      return resolveDt(node.component, node.operand, schema);
   }
 }
 
@@ -212,34 +220,77 @@ function arithLitVsTyped(
   value: number,
   d: DType,
 ): { opDtype: DType; colTarget: DType } {
+  // Temporal restricted algebra (dtypes.md §9): literal offset; validation untested.
+  if (d === 'timestamp') return { opDtype: 'timestamp', colTarget: 'timestamp' };
+  if (d === 'date32') return { opDtype: 'date32', colTarget: 'date32' };
   if (!isNumeric(d)) {
-    throw unsupportedDtype(op, d, 'arithmetic requires a numeric dtype; cast first.');
+    throw unsupportedDtype(op, d, 'arithmetic');
   }
   if (FLOAT.has(d)) return { opDtype: d, colTarget: d }; // literal adopts the float dtype
-  // integer column: adopt if the literal is an in-range integer, else widen to f64.
+  if (d === 'i64') {
+    // number literal vs i64 column: adopt as i64 if safe-int, else widen both to f64.
+    if (Number.isSafeInteger(value)) return { opDtype: 'i64', colTarget: 'i64' };
+    return { opDtype: 'f64', colTarget: 'f64' };
+  }
+  // i32/u32 column: adopt if the literal is an in-range integer, else widen to f64.
   if (intInRange(value, d as 'i32' | 'u32')) return { opDtype: d, colTarget: d };
   return { opDtype: 'f64', colTarget: 'f64' }; // fractional / out-of-range → int→float
 }
 
-/** Common arithmetic dtype for two typed operands (dtypes.md §3.1). */
+/** Common arithmetic dtype for two typed operands (dtypes.md §3.1 + v2 §8 + §9 temporal). */
 function arithCommon(op: ArithOp, a: DType, b: DType): DType {
-  if (!isNumeric(a)) throw unsupportedDtype(op, a, 'arithmetic requires a numeric dtype; cast first.');
-  if (!isNumeric(b)) throw unsupportedDtype(op, b, 'arithmetic requires a numeric dtype; cast first.');
+  // Temporal restricted algebra (dtypes.md §9): check before numeric rules.
+  if (TEMPORAL.has(a) || TEMPORAL.has(b)) {
+    return temporalArithResult(op, a, b);
+  }
+  if (!isNumeric(a)) throw unsupportedDtype(op, a, 'arithmetic');
+  if (!isNumeric(b)) throw unsupportedDtype(op, b, 'arithmetic');
   if (a === b) return a;
-  // the single implicit rule: int → float widening
-  if (INTEGER.has(a) && b === 'f64') return 'f64';
-  if (INTEGER.has(b) && a === 'f64') return 'f64';
-  if (INTEGER.has(a) && b === 'f32') return 'f32';
-  if (INTEGER.has(b) && a === 'f32') return 'f32';
+  // v2 i64 lattice: i32/u32 ⊕ i64 → i64; i64 ⊕ f64 → f64; i64 ⊕ f32 → f64
+  if ((a === 'i64' && (b === 'i32' || b === 'u32')) || (b === 'i64' && (a === 'i32' || a === 'u32'))) return 'i64';
+  if ((a === 'i64' && FLOAT.has(b)) || (b === 'i64' && FLOAT.has(a))) return 'f64';
+  // int → float widening (v1 rule, non-i64)
+  if ((a === 'i32' || a === 'u32') && b === 'f64') return 'f64';
+  if ((b === 'i32' || b === 'u32') && a === 'f64') return 'f64';
+  if ((a === 'i32' || a === 'u32') && b === 'f32') return 'f32';
+  if ((b === 'i32' || b === 'u32') && a === 'f32') return 'f32';
   throw dtypeMismatch(op, a, b, 'insert an explicit .cast() (only int→float widening is implicit).');
+}
+
+/**
+ * Temporal restricted arithmetic (dtypes.md §9): only the listed pairs are legal.
+ * Everything else throws a dtype error naming op + both dtypes.
+ */
+function temporalArithResult(op: ArithOp, a: DType, b: DType): DType {
+  // timestamp − timestamp → i64 (ms duration)
+  if (op === 'sub' && a === 'timestamp' && b === 'timestamp') return 'i64';
+  // timestamp ± integer-ms-column → timestamp
+  if ((op === 'add' || op === 'sub') && a === 'timestamp' && INTEGER.has(b)) return 'timestamp';
+  // commutative add: integer + timestamp
+  if (op === 'add' && INTEGER.has(a) && b === 'timestamp') return 'timestamp';
+  // date32 − date32 → i32 (days duration)
+  if (op === 'sub' && a === 'date32' && b === 'date32') return 'i32';
+  // date32 ± integer-days-column → date32  (i32/u32 only; not i64 per §9)
+  if ((op === 'add' || op === 'sub') && a === 'date32' && (b === 'i32' || b === 'u32')) return 'date32';
+  if (op === 'add' && (a === 'i32' || a === 'u32') && b === 'date32') return 'date32';
+  throw new ExprError(`${op}(${a},${b})`);
 }
 
 function resolveNeg(operandE: Expr, schema: Schema): TExpr {
   const t = resolveNode(operandE, schema);
   if (!isNumeric(t.dtype)) {
-    throw unsupportedDtype('neg', t.dtype, 'negation requires a numeric dtype; cast first.');
+    throw unsupportedDtype('neg', t.dtype);
   }
   return { kind: 'neg', dtype: t.dtype, operand: t };
+}
+
+// ── dt accessor (dtypes.md §10) ─────────────────────────────────────────────────
+
+function resolveDt(component: DtComponent, operandE: Expr, schema: Schema): TExpr {
+  const t = resolveNode(operandE, schema);
+  if (!TEMPORAL.has(t.dtype)) throw unsupportedDtype('dt', t.dtype);
+  // Result is always i32 (field value: year, month, day, etc.; dtypes.md §10).
+  return { kind: 'dt', component, dtype: 'i32', operand: t };
 }
 
 // ── Comparisons (dtypes.md §4.1; exact-match except literal coercion) ──────────
@@ -264,6 +315,15 @@ function resolveCompare(op: CompareOp, leftE: Expr, rightE: Expr, schema: Schema
   if (ln !== null || rn !== null) {
     const litVal = (ln ?? rn) as number;
     const typed = resolveNode(ln !== null ? rightE : leftE, schema);
+    // Temporal vs number literal: literal = physical unit (days for date32, ms for timestamp).
+    if (typed.dtype === 'date32') {
+      const litT = litTExpr(litVal, 'date32');
+      return cmp(op, 'date32', ln !== null ? litT : typed, ln !== null ? typed : litT);
+    }
+    if (typed.dtype === 'timestamp') {
+      const litT = litTExpr(litVal, 'timestamp');
+      return cmp(op, 'timestamp', ln !== null ? litT : typed, ln !== null ? typed : litT);
+    }
     if (!isNumeric(typed.dtype)) {
       throw dtypeMismatch(op, ln !== null ? 'f64' : typed.dtype, ln !== null ? typed.dtype : 'f64',
         'cannot compare a number to a non-numeric column.');
@@ -280,7 +340,7 @@ function resolveCompare(op: CompareOp, leftE: Expr, rightE: Expr, schema: Schema
     if (typed.dtype !== 'utf8') {
       throw dtypeMismatch(op, 'utf8', typed.dtype, 'cannot compare a string to a non-utf8 column.');
     }
-    if (!isEqNe) throw unsupportedDtype(op, 'utf8', 'string ordering is not in v1; only eq/ne.');
+    if (!isEqNe) throw unsupportedDtype(op, 'utf8', 'string ordering');
     const litT = litTExpr(strLit, 'utf8');
     return cmp(op, 'utf8', stringLit(leftE) !== null ? litT : typed, stringLit(leftE) !== null ? typed : litT);
   }
@@ -291,7 +351,7 @@ function resolveCompare(op: CompareOp, leftE: Expr, rightE: Expr, schema: Schema
     if (typed.dtype !== 'bool') {
       throw dtypeMismatch(op, 'bool', typed.dtype, 'cannot compare a boolean to a non-bool column.');
     }
-    if (!isEqNe) throw unsupportedDtype(op, 'bool', 'bool ordering is not defined; only eq/ne.');
+    if (!isEqNe) throw unsupportedDtype(op, 'bool');
     const litT = litTExpr(boolLit, 'bool');
     return cmp(op, 'bool', boolLitOf(leftE) !== null ? litT : typed, boolLitOf(leftE) !== null ? typed : litT);
   }
@@ -300,13 +360,14 @@ function resolveCompare(op: CompareOp, leftE: Expr, rightE: Expr, schema: Schema
   const L = resolveNode(leftE, schema);
   const R = resolveNode(rightE, schema);
   if (L.dtype !== R.dtype) {
-    throw dtypeMismatch(op, L.dtype, R.dtype, 'comparisons require identical dtypes; insert an explicit .cast().');
+    throw dtypeMismatch(op, L.dtype, R.dtype, 'cast');
   }
   const d = L.dtype;
   if (d === 'utf8' || d === 'bool') {
     // column-vs-column utf8/bool comparison needs dict unification / xor — not in P3.1.
-    throw unsupportedDtype(op, d, 'column-vs-column comparison on this dtype is not supported in P3.1; compare against a literal.');
+    throw unsupportedDtype(op, d, 'column-vs-column');
   }
+  // Temporal dtypes are allowed in column-vs-column comparisons (route to physical kernel).
   return cmp(op, d, L, R);
 }
 
@@ -317,7 +378,8 @@ function cmp(op: CompareOp, operandDtype: DType, left: TExpr, right: TExpr): TEx
 /** Operand dtype for a numeric literal vs a typed numeric column in a comparison. */
 function cmpLitVsTyped(value: number, d: DType): DType {
   if (FLOAT.has(d)) return d;
-  // integer column: exact match if in-range integer, else literal-driven widen to f64.
+  if (d === 'i64') return Number.isSafeInteger(value) ? 'i64' : 'f64';
+  // i32/u32 column: exact match if in-range integer, else literal-driven widen to f64.
   return intInRange(value, d as 'i32' | 'u32') ? d : 'f64';
 }
 
@@ -335,14 +397,14 @@ function boolLitOf(e: Expr): boolean | null {
 function resolveBool(op: BoolOp, leftE: Expr, rightE: Expr, schema: Schema): TExpr {
   const L = resolveNode(leftE, schema);
   const R = resolveNode(rightE, schema);
-  if (L.dtype !== 'bool') throw unsupportedDtype(op, L.dtype, 'boolean operands must be boolean expressions.');
-  if (R.dtype !== 'bool') throw unsupportedDtype(op, R.dtype, 'boolean operands must be boolean expressions.');
+  if (L.dtype !== 'bool') throw unsupportedDtype(op, L.dtype, 'boolean');
+  if (R.dtype !== 'bool') throw unsupportedDtype(op, R.dtype, 'boolean');
   return { kind: 'bool', op, dtype: 'bool', left: L, right: R };
 }
 
 function resolveNot(operandE: Expr, schema: Schema): TExpr {
   const t = resolveNode(operandE, schema);
-  if (t.dtype !== 'bool') throw unsupportedDtype('not', t.dtype, 'not requires a boolean expression.');
+  if (t.dtype !== 'bool') throw unsupportedDtype('not', t.dtype, 'boolean');
   return { kind: 'not', dtype: 'bool', operand: t };
 }
 
@@ -363,18 +425,35 @@ function validateFill(value: ScalarValue, d: DType): void {
     if (typeof value !== 'boolean') throw badLiteral(value, d, 'fillNull');
     return;
   }
+  // i64 and timestamp both use bigint at the boundary (dtypes.md §6/§11)
+  if (d === 'i64' || d === 'timestamp') {
+    if (typeof value !== 'bigint' && typeof value !== 'number') throw badLiteral(value, d, 'fillNull');
+    if (typeof value === 'number' && !Number.isSafeInteger(value)) throw badLiteral(value, d, 'fillNull');
+    return;
+  }
   if (typeof value !== 'number') throw badLiteral(value, d, 'fillNull');
-  if (INTEGER.has(d) && !intInRange(value, d as 'i32' | 'u32')) throw badLiteral(value, d, 'fillNull');
+  if ((d === 'i32' || d === 'u32') && !intInRange(value, d)) throw badLiteral(value, d, 'fillNull');
 }
 
-/** The v1 cast matrix (dtypes.md §2). `true` = allowed; missing = ✗. */
+/**
+ * The v2 cast matrix (dtypes.md §2 + §8 + §7.2 temporal). `true` = allowed; missing = ✗.
+ * Temporal reinterpret casts: date32↔i32, timestamp↔i64 (free, no kernel).
+ * Scale casts: date32→timestamp (×86_400_000), timestamp→date32 (floor-div).
+ */
 const CAST_OK: Readonly<Record<DType, ReadonlySet<DType>>> = {
-  f64: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  f32: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  i32: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  u32: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  bool: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
+  f64: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  f32: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  // i32 + date32 reinterpret (dtypes.md §7.2)
+  i32: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64', 'date32']),
+  u32: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  bool: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
   utf8: new Set(['utf8']),
+  // i64 ↔ utf8 is ✗; i64 + timestamp reinterpret (dtypes.md §7.2)
+  i64: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64', 'timestamp']),
+  // date32: reinterpret to i32, scale to timestamp; identity
+  date32: new Set(['i32', 'timestamp', 'date32']),
+  // timestamp: reinterpret to i64, floor-div to date32; identity
+  timestamp: new Set(['i64', 'date32', 'timestamp']),
 };
 
 function resolveCast(operandE: Expr, to: DType, schema: Schema): TExpr {
@@ -398,25 +477,26 @@ export function aggResult(op: AggOp, d: DType): DType {
     case 'count':
       return 'i32'; // non-null count, any dtype (dtypes.md §4.4)
     case 'nunique':
-      if (isNumeric(d) || d === 'utf8') return 'i32';
-      throw unsupportedDtype('nunique', d, 'nunique supports numeric and utf8 columns.');
+      if (isNumeric(d) || d === 'utf8' || TEMPORAL.has(d)) return 'i32';
+      throw unsupportedDtype('nunique', d);
     case 'sum':
       if (FLOAT.has(d)) return d; // f64→f64, f32→f32
-      if (INTEGER.has(d)) return 'f64'; // int sums widen to f64 (ABI §9)
-      throw unsupportedDtype('sum', d, 'sum requires a numeric dtype.');
+      if (d === 'i64') return 'i64'; // i64 sum → i64 (bigint wrapping, ADR-009)
+      if (d === 'i32' || d === 'u32') return 'f64'; // int sums widen to f64 (ABI §9)
+      throw unsupportedDtype('sum', d);
     case 'mean':
     case 'std':
     case 'var':
       if (isNumeric(d)) return 'f64';
-      throw unsupportedDtype(op, d, `${op} requires a numeric dtype.`);
+      throw unsupportedDtype(op, d);
     case 'min':
     case 'max':
-      if (isNumeric(d)) return d;
-      throw unsupportedDtype(op, d, `${op} requires a numeric dtype.`);
+      if (isNumeric(d) || TEMPORAL.has(d)) return d;
+      throw unsupportedDtype(op, d);
     case 'first':
     case 'last':
-      if (isNumeric(d) || d === 'utf8') return d;
-      throw unsupportedDtype(op, d, `${op} supports numeric and utf8 columns.`);
+      if (isNumeric(d) || d === 'utf8' || TEMPORAL.has(d)) return d;
+      throw unsupportedDtype(op, d);
   }
 }
 

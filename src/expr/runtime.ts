@@ -19,7 +19,7 @@
 
 import type { MemoryContext } from '../memory/context.js';
 import type { FrameView, KernelWasm } from './frame.js';
-import { callKernel } from './frame.js';
+import { callKernel, callKernelBigInt } from './frame.js';
 import type { ViewDType, ColumnView, ColumnBuffer } from '../memory/views.js';
 import { validityBytes, getBit, setBit } from '../memory/bitmap.js';
 
@@ -137,6 +137,15 @@ export class Runtime {
   call(name: string, ...args: number[]): number {
     this.trace.kernels.push(name);
     return callKernel(this.wasm, name, args);
+  }
+
+  /**
+   * Like {@link call} but accepts `bigint` args and may return `bigint`.
+   * Required for i64 scalar kernels and i64 reductions (wasm i64 ↔ JS BigInt).
+   */
+  callBigInt(name: string, ...args: (number | bigint)[]): number | bigint {
+    this.trace.kernels.push(name);
+    return callKernelBigInt(this.wasm, name, args);
   }
 
   /** A live `viewOf` view (never cache the result — ADR-001). */

@@ -6,6 +6,7 @@
  */
 
 import type { Column } from '../memory/column.js';
+import { DTYPES } from '../memory/dtype.js';
 import { decodeDictionary } from '../memory/dictionary.js';
 import type { DfRuntime, FrameWasm } from './runtime.js';
 import { rawKernel } from './runtime.js';
@@ -86,7 +87,9 @@ function applyKey(
         ctx.mod.free(widePtr);
       }
     } else {
-      callArgsort(wasm, `argsort_${col.dtype}`, col.dataPtr, av.ptr, permPtr, len, desc, scratchPtr, needScratch);
+      // Temporal types route to their physical kernel token (ADR-010): date32→i32, timestamp→i64.
+      const token = DTYPES[col.dtype].wasm;
+      callArgsort(wasm, `argsort_${token}`, col.dataPtr, av.ptr, permPtr, len, desc, scratchPtr, needScratch);
     }
   } finally {
     freeAligned(ctx, av);

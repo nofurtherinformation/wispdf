@@ -42,6 +42,24 @@ export function callKernel(wasm: KernelWasm, name: string, args: readonly number
 }
 
 /**
+ * Like {@link callKernel} but accepts `bigint` args and may return `bigint` — needed
+ * for i64 scalar kernels (e.g. `add_i64_scalar`) and i64 reductions (e.g. `sum_i64_null`).
+ * The WebAssembly JS-API automatically maps wasm `i64` ↔ JS `BigInt`.
+ */
+export function callKernelBigInt(
+  wasm: KernelWasm,
+  name: string,
+  args: readonly (number | bigint)[],
+): number | bigint {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fn = (wasm as unknown as Record<string, ((...a: any[]) => number | bigint) | undefined>)[name];
+  if (typeof fn !== 'function') {
+    throw new Error(`kernel export not found: ${name}`);
+  }
+  return fn(...args);
+}
+
+/**
  * Everything the compiler needs from a frame to type-check, allocate, and run a plan.
  * Implements {@link Schema} (via `dtypeOf`/`columnNames`) so it doubles as the type
  * checker's schema.

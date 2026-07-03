@@ -13,8 +13,8 @@
 
 import type { WasmMemoryModule } from './loader.js';
 
-/** Storage dtypes whose data buffer maps to a numeric `TypedArray` (dtypes.md §1). */
-export type ViewDType = 'f64' | 'f32' | 'i32' | 'u32' | 'u8' | 'bool';
+/** Storage dtypes whose data buffer maps to a numeric `TypedArray` (dtypes.md §1). `i64` maps to `BigInt64Array`. */
+export type ViewDType = 'f64' | 'f32' | 'i32' | 'u32' | 'u8' | 'bool' | 'i64';
 
 /** Location + shape of a column buffer inside linear memory. */
 export interface ColumnBuffer {
@@ -26,19 +26,19 @@ export interface ColumnBuffer {
   readonly dtype: ViewDType;
 }
 
-/** The concrete `TypedArray` kinds a column view can be. */
+/** The concrete `TypedArray` kinds a column view can be. `BigInt64Array` is used for `i64` columns. */
 export type ColumnView =
   | Float64Array
   | Float32Array
   | Int32Array
   | Uint32Array
-  | Uint8Array;
+  | Uint8Array
+  | BigInt64Array;
 
-interface TypedArrayCtor {
-  new (buffer: ArrayBufferLike, byteOffset: number, length: number): ColumnView;
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyTypedArrayCtor = new (buffer: ArrayBufferLike, byteOffset: number, length: number) => any;
 
-function ctorFor(dtype: ViewDType): TypedArrayCtor {
+function ctorFor(dtype: ViewDType): AnyTypedArrayCtor {
   switch (dtype) {
     case 'f64':
       return Float64Array;
@@ -48,6 +48,8 @@ function ctorFor(dtype: ViewDType): TypedArrayCtor {
       return Int32Array;
     case 'u32':
       return Uint32Array;
+    case 'i64':
+      return BigInt64Array;
     case 'u8':
     case 'bool':
       return Uint8Array;

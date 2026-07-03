@@ -46,6 +46,11 @@ export class Series {
     });
   }
 
+  // ponytail: Series.dt deferred — size gate; impl ready in dtField.ts when gate raises
+  get dt(): never {
+    throw new TypeError(`Series.dt not yet in main bundle (size gate)`);
+  }
+
   [Symbol.iterator](): IterableIterator<Cell> {
     return this.toArray()[Symbol.iterator]();
   }
