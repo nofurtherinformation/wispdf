@@ -90,6 +90,40 @@ export function writeDictionary(ctx: MemoryContext, uniques: readonly string[]):
 }
 
 /**
+ * Write a dictionary directly from raw UTF-8 bytes and Arrow-style offsets —
+ * no JS string decode or encode (ABI §12 ingest note, ADR-002).
+ *
+ * `rawOffsets[k]..rawOffsets[k+1]` is the byte range of string `k` in
+ * `rawBytes`; both arrays are already in our dictionaries' layout. This is a
+ * pure bulk-copy: O(count + bytesLen), zero TextDecoder/TextEncoder calls.
+ *
+ * Allocates both wasm buffers before taking any view so a grow between the two
+ * allocs cannot detach a live TypedArray (ADR-001).
+ */
+export function writeDictionaryFromRawBytes(
+  ctx: MemoryContext,
+  rawBytes: Uint8Array,
+  rawOffsets: Int32Array,
+  count: number,
+): Dictionary {
+  const bytesLen = count > 0 ? (rawOffsets[count] ?? 0) : 0;
+
+  // Allocate both buffers before taking any view (ADR-001 grow-invalidation rule).
+  const offsetsPtr = ctx.mod.alloc((count + 1) * 4);
+  const bytesPtr   = ctx.mod.alloc(bytesLen); // alloc(0) is valid per ABI §3
+
+  const offsets = ctx.viewOf({ ptr: offsetsPtr, length: count + 1, dtype: 'i32' }) as Int32Array;
+  offsets.set(rawOffsets.subarray(0, count + 1));
+
+  if (bytesLen > 0) {
+    const bytes = ctx.viewOf({ ptr: bytesPtr, length: bytesLen, dtype: 'u8' }) as Uint8Array;
+    bytes.set(rawBytes.subarray(0, bytesLen));
+  }
+
+  return { count, offsetsPtr, bytesPtr, bytesLen };
+}
+
+/**
  * Decode dictionary slot `slot` to a string, memoized (ADR-002). First call for a
  * slot reads its UTF-8 bytes across the boundary (a *miss*); later calls reuse the
  * cached string (a *hit*). `slot` must be in `[0, dict.count)`.

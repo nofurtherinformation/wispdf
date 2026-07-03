@@ -9,10 +9,12 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
+import fc from 'fast-check';
 import {
   tableFromArrays, tableToIPC, tableFromIPC, makeVector, vectorFromArray,
   makeTable, makeData, Schema, Field, Int64 as ArrowInt64, DateDay, TimestampMillisecond,
   TimestampSecond, TimestampMicrosecond, TimestampNanosecond,
+  Utf8,
   type Table,
 } from 'apache-arrow';
 import { toArrow, fromArrow } from '../../src/io/arrow.js';
@@ -848,6 +850,114 @@ describe('fromArrow — error cases', () => {
     // This test intentionally validates the happy path doesn't accidentally throw.
     const df = makeDF(rt, { v: [1n, 2n] }, { v: 'i64' });
     expect(() => toArrow(df)).not.toThrow();
+    df.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CP.1 — ingest fast path (ABI §12, 2026-07-03)
+// ---------------------------------------------------------------------------
+
+describe('CP.1 — dict-encoded Arrow passthrough (no decode/re-encode)', () => {
+  it('round-trips dict-encoded utf8 with duplicates and nulls', () => {
+    // apache-arrow produces Dict<Int32,Utf8> for string arrays
+    const t = tableFromArrays({ s: ['hello', 'world', 'hello', null, 'world', ''] });
+    const buf = tableToIPC(t, 'stream');
+    const df = fromArrow(buf, rt);
+    expect(df.dtypes['s']).toBe('utf8');
+    expect(df.toColumns()['s']).toEqual(['hello', 'world', 'hello', null, 'world', '']);
+    df.dispose();
+  });
+
+  it('round-trips dict-encoded utf8 with unicode strings', () => {
+    const strs = ['你好', '世界', '😀', '你好', '日本語', '😀', null, ''];
+    const t = tableFromArrays({ s: strs });
+    const buf = tableToIPC(t, 'stream');
+    const df = fromArrow(buf, rt);
+    expect(df.toColumns()['s']).toEqual(strs);
+    df.dispose();
+  });
+
+  it('round-trips dict-encoded utf8 all-unique (no duplicates)', () => {
+    // All-unique triggers the byte-dedup identity path in the plain-utf8 case
+    const strs = Array.from({ length: 100 }, (_, i) => `string_${i}_unique`);
+    const t = tableFromArrays({ s: strs });
+    const buf = tableToIPC(t, 'stream');
+    const df = fromArrow(buf, rt);
+    expect(df.toColumns()['s']).toEqual(strs);
+    df.dispose();
+  });
+
+  it('round-trips dict-encoded utf8 all-same', () => {
+    const t = tableFromArrays({ s: Array(50).fill('repeat') });
+    const buf = tableToIPC(t, 'stream');
+    const df = fromArrow(buf, rt);
+    expect(df.toColumns()['s']).toEqual(Array(50).fill('repeat'));
+    df.dispose();
+  });
+});
+
+describe('CP.1 — plain UTF-8 fromArrow byte-dedup (property test)', () => {
+  /**
+   * Build an Arrow IPC buffer with a plain UTF-8 (non-dict) column.
+   * Apache-arrow encodes strings as Dict<Int32,Utf8> by default when using
+   * tableFromArrays with a string array — we must force plain Utf8 explicitly.
+   */
+  function makePlainUtf8Buf(strings: (string | null)[]): Uint8Array {
+    const nonNull = strings.map((s) => s ?? '');
+    const vec = vectorFromArray(nonNull, new Utf8());
+    const t = tableFromArrays({ s: vec });
+    return tableToIPC(t, 'stream');
+  }
+
+  it('byte-dedup produces identical values to JS-string-based dedup', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.oneof(
+            fc.string(),
+            fc.fullUnicodeString(),
+            fc.constant(''),
+            fc.constant('dup'),
+            fc.constant('dup'),  // ensure some duplicates appear
+          ),
+          { minLength: 1, maxLength: 80 },
+        ),
+        (strings) => {
+          const buf = makePlainUtf8Buf(strings);
+          const df = fromArrow(buf, rt);
+          try {
+            const got = df.toColumns()['s'] as string[];
+            expect(got).toEqual(strings);
+          } finally {
+            df.dispose();
+          }
+        },
+      ),
+      { numRuns: 150 },
+    );
+  });
+
+  it('handles all-unique strings (identity index path)', () => {
+    const uniq = Array.from({ length: 200 }, (_, i) => `item_${i}`);
+    const buf = makePlainUtf8Buf(uniq);
+    const df = fromArrow(buf, rt);
+    expect(df.toColumns()['s']).toEqual(uniq);
+    df.dispose();
+  });
+
+  it('handles all-same strings (single-slot dict)', () => {
+    const same = Array(200).fill('same');
+    const buf = makePlainUtf8Buf(same);
+    const df = fromArrow(buf, rt);
+    expect(df.toColumns()['s']).toEqual(same);
+    df.dispose();
+  });
+
+  it('handles empty string column (0 rows)', () => {
+    const buf = makePlainUtf8Buf([]);
+    const df = fromArrow(buf, rt);
+    expect(df.length).toBe(0);
     df.dispose();
   });
 });

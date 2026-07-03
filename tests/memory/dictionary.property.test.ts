@@ -9,6 +9,9 @@ import {
   decodeDictionary,
   decodeStats,
   unifyDictionaries,
+  writeDictionary,
+  writeDictionaryFromRawBytes,
+  freeDictionary,
 } from '../../src/memory/index.js';
 
 // P1.2 dictionary-store gate (ABI §4.4, ADR-002):
@@ -121,5 +124,87 @@ describe('dictionary unification (JS-side; wasm unify_dict is Phase 2)', () => {
       ),
       { numRuns: 150 },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CP.1 — writeDictionaryFromRawBytes (ABI §12)
+// ---------------------------------------------------------------------------
+
+describe('writeDictionaryFromRawBytes — identical to writeDictionary (CP.1)', () => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  /**
+   * Build raw Arrow-style bytes + offsets for a string array, then verify that
+   * writeDictionaryFromRawBytes produces the same decodable dictionary as
+   * writeDictionary(ctx, strings).
+   */
+  it('produces byte-identical dictionaries to writeDictionary for random string arrays', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.oneof(fc.string(), fc.fullUnicodeString(), fc.constant(''), fc.constant('hello')),
+          { maxLength: 60 },
+        ),
+        (strings) => {
+          // Build raw bytes + offsets in the same layout as Arrow plain UTF-8
+          const encoded = strings.map((s) => enc.encode(s));
+          let totalBytes = 0;
+          for (const e of encoded) totalBytes += e.length;
+          const rawBytes   = new Uint8Array(totalBytes);
+          const rawOffsets = new Int32Array(strings.length + 1);
+          let pos = 0;
+          for (let k = 0; k < strings.length; k++) {
+            rawOffsets[k] = pos;
+            rawBytes.set(encoded[k]!, pos);
+            pos += encoded[k]!.length;
+          }
+          rawOffsets[strings.length] = pos;
+
+          // Build via old path (string → TextEncoder)
+          const dictOld = writeDictionary(ctx, strings);
+          // Build via new path (raw bytes → bulk-copy)
+          const dictNew = writeDictionaryFromRawBytes(ctx, rawBytes, rawOffsets, strings.length);
+
+          try {
+            expect(dictNew.count).toBe(dictOld.count);
+            expect(dictNew.bytesLen).toBe(dictOld.bytesLen);
+            // Slot-by-slot: every slot decodes to the same string
+            const decodedOld = decodeDictionary(ctx, dictOld);
+            const decodedNew = decodeDictionary(ctx, dictNew);
+            expect(decodedNew).toEqual(decodedOld);
+          } finally {
+            freeDictionary(ctx, dictOld);
+            freeDictionary(ctx, dictNew);
+          }
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+
+  it('handles empty string array (count=0)', () => {
+    const dict = writeDictionaryFromRawBytes(ctx, new Uint8Array(0), new Int32Array([0]), 0);
+    try {
+      expect(dict.count).toBe(0);
+      expect(dict.bytesLen).toBe(0);
+    } finally {
+      freeDictionary(ctx, dict);
+    }
+  });
+
+  it('handles all-empty-string array', () => {
+    const rawBytes   = new Uint8Array(0);
+    const rawOffsets = new Int32Array([0, 0, 0, 0]);
+    const dict = writeDictionaryFromRawBytes(ctx, rawBytes, rawOffsets, 3);
+    const expected = writeDictionary(ctx, ['', '', '']);
+    try {
+      expect(dict.count).toBe(expected.count);
+      expect(decodeDictionary(ctx, dict)).toEqual(decodeDictionary(ctx, expected));
+    } finally {
+      freeDictionary(ctx, dict);
+      freeDictionary(ctx, expected);
+    }
   });
 });

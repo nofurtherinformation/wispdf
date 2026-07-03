@@ -161,6 +161,22 @@ export class DataFrame implements FrameView, GroupBySource {
     return new DataFrame(rt, entries, length);
   }
 
+  /**
+   * @internal Adopt pre-built wasm Column objects directly into a DataFrame,
+   * bypassing the JS-array round-trip of {@link fromColumns}. Used by
+   * `fromArrow` for zero-copy column adoption (CP.1 ingest fast path).
+   *
+   * Every column in `named` must have `owned === true` and correct wasm pointers;
+   * ownership transfers to the returned DataFrame (and its OwnedColumn wrappers).
+   */
+  static _adoptColumns(
+    rt: DfRuntime,
+    named: ReadonlyArray<{ name: string; col: Column }>,
+    length: number,
+  ): DataFrame {
+    return DataFrame.fromRoots(rt, named as NamedColumn[], length);
+  }
+
   get shape(): readonly [number, number] {
     return [this.length, this.entries.length];
   }

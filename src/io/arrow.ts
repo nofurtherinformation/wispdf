@@ -33,8 +33,8 @@
 import type { MemoryContext } from '../memory/context.js';
 import { DTYPES, type DType } from '../memory/dtype.js';
 import { validityBytes, getBit, setBit } from '../memory/bitmap.js';
-import { columnToArray, type Column } from '../memory/column.js';
-import { writeDictionary } from '../memory/dictionary.js';
+import { columnToArray, createColumn, type Column, type ColumnInput } from '../memory/column.js';
+import { writeDictionary, writeDictionaryFromRawBytes } from '../memory/dictionary.js';
 import { DataFrame, type FrameOptions } from '../frame/dataframe.js';
 import type { DfRuntime } from '../frame/runtime.js';
 import { FBBuilder, FBTable, fbRoot } from './fb.js';
@@ -593,6 +593,175 @@ function parseSchema(meta: Uint8Array): ArrowField[] {
   return fields;
 }
 
+// ---------------------------------------------------------------------------
+// Byte-hash dedup for plain UTF-8 ingest (ABI §12, CP.1 fast path)
+// ---------------------------------------------------------------------------
+
+/**
+ * FNV-1a 32-bit hash over `bytes[start..end)`.
+ * Empty range → fixed non-zero value (0x811c9dc5, the FNV offset basis).
+ */
+function fnv1aBytes(bytes: Uint8Array, start: number, end: number): number {
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = start; i < end; i++) {
+    h ^= bytes[i]!;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+/**
+ * True if `a[as..ae)` and `b[bs..be)` are identical byte sequences
+ * (caller already checked length equality).
+ */
+function bytesRangeEqual(
+  a: Uint8Array, as_: number, ae: number,
+  b: Uint8Array, bs: number,
+): boolean {
+  const len = ae - as_;
+  for (let i = 0; i < len; i++) {
+    if (a[as_ + i] !== b[bs + i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Dedup result: unique byte ranges in first-seen order + per-row index array.
+ * `dictOffsets` and `dictBytes` are in Arrow/databonk dictionary layout
+ * (offsets[k]..offsets[k+1] = byte range of slot k in bytes).
+ */
+interface ByteDedupResult {
+  dictOffsets: Int32Array;
+  dictBytes:   Uint8Array;
+  dictCount:   number;
+  indices:     Int32Array;
+}
+
+/** Next power of two ≥ n (n must be > 0). */
+function nextPow2(n: number): number {
+  let p = 1;
+  while (p < n) p <<= 1;
+  return p;
+}
+
+/**
+ * Deduplicate a plain-UTF-8 Arrow column on raw bytes — no TextDecoder or
+ * TextEncoder. Hash each row's byte range with FNV-1a; use a flat open-
+ * addressing hash table (Int32Array) for O(1) amortised lookup — much faster
+ * than a JS `Map` for large numeric keys.
+ *
+ * For the all-unique case (e.g. 85K unique GEOIDs): the hot path never
+ * enters a collision branch; the compaction step is skipped entirely and the
+ * Arrow offsets/bytes are returned as-is (no second copy).
+ *
+ * O(n × avgLen + uniqueCount × avgLen): one byte pass for hashing + one for
+ * compaction (skipped for all-unique).
+ */
+function buildDictFromPlainUtf8(
+  rawBytes: Uint8Array,
+  offsets:  Int32Array,
+  rowLen:   number,
+): ByteDedupResult {
+  const indices = new Int32Array(rowLen);
+
+  if (rowLen === 0) {
+    return {
+      dictOffsets: new Int32Array([0]),
+      dictBytes:   new Uint8Array(0),
+      dictCount:   0,
+      indices,
+    };
+  }
+
+  // Flat open-addressing hash table: ht[slot] = dict-slot-index, or -1 (empty).
+  // Sized to 2× rowLen so load factor ≤ 0.5 keeps expected probes near 1.
+  const htCap  = nextPow2(rowLen * 2);
+  const htMask = htCap - 1;
+  const ht     = new Int32Array(htCap).fill(-1); // -1 = empty
+  // hash values stored alongside ht to avoid re-hashing on collision probe
+  const htHash = new Uint32Array(htCap);
+
+  // Arrays tracking unique string byte ranges in rawBytes (first-seen order).
+  // For n unique strings these stay as compact Int32Arrays — no boxing.
+  let dictCount = 0;
+  // Use Float64Array as a growable buffer for (start, end) pairs to avoid
+  // boxing overhead of a plain number[]. We resize by doubling.
+  let slotCap = Math.min(rowLen, 256);
+  let slotS   = new Float64Array(slotCap); // slot k start in rawBytes
+  let slotE   = new Float64Array(slotCap); // slot k end   in rawBytes
+
+  for (let k = 0; k < rowLen; k++) {
+    const s = offsets[k]!;
+    const e = offsets[k + 1]!;
+    const h = fnv1aBytes(rawBytes, s, e);
+    const len = e - s;
+
+    // Open-address probe: find either a match or an empty slot.
+    let slot = (h >>> 0) & htMask;
+    let found = -1;
+    for (;;) {
+      const di = ht[slot]!;
+      if (di < 0) break;                        // empty — this string is new
+      if (htHash[slot] === (h >>> 0)) {
+        // Same hash: byte-compare to confirm (collision guard)
+        const ds = slotS[di]!;
+        const de = slotE[di]!;
+        if (de - ds === len && bytesRangeEqual(rawBytes, s, e, rawBytes, ds)) {
+          found = di;
+          break;
+        }
+      }
+      slot = (slot + 1) & htMask;               // linear probe
+    }
+
+    if (found >= 0) {
+      indices[k] = found;
+    } else {
+      // New unique string: record it and insert into the hash table.
+      const idx = dictCount++;
+      if (idx >= slotCap) {
+        slotCap <<= 1;
+        const ns = new Float64Array(slotCap); ns.set(slotS); slotS = ns;
+        const ne = new Float64Array(slotCap); ne.set(slotE); slotE = ne;
+      }
+      slotS[idx] = s;
+      slotE[idx] = e;
+      ht[slot]     = idx;
+      htHash[slot] = h >>> 0;
+      indices[k]   = idx;
+    }
+  }
+
+  // All-unique fast path: the Arrow bytes and offsets ARE the dictionary verbatim
+  // (first-seen order = row order when every row is unique). Skip the compaction
+  // copy: return aliases instead. writeDictionaryFromRawBytes copies them to wasm.
+  if (dictCount === rowLen) {
+    return { dictOffsets: offsets, dictBytes: rawBytes, dictCount, indices };
+  }
+
+  // General path: build compact dictOffsets + dictBytes from the unique ranges.
+  const dictOffsets = new Int32Array(dictCount + 1);
+  let acc = 0;
+  for (let k = 0; k < dictCount; k++) {
+    dictOffsets[k] = acc;
+    acc += slotE[k]! - slotS[k]!;
+  }
+  dictOffsets[dictCount] = acc;
+
+  const dictBytes = new Uint8Array(acc);
+  let pos = 0;
+  for (let k = 0; k < dictCount; k++) {
+    const ss = slotS[k]!;
+    const ee = slotE[k]!;
+    dictBytes.set(rawBytes.subarray(ss, ee), pos);
+    pos += ee - ss;
+  }
+
+  return { dictOffsets, dictBytes, dictCount, indices };
+}
+
+// ---------------------------------------------------------------------------
+
 interface DictEntry { offsets: Int32Array; bytes: Uint8Array; count: number }
 
 function parseDictBatch(meta: Uint8Array, body: Uint8Array): { id: number; entry: DictEntry } {
@@ -630,7 +799,14 @@ function readBody(body: Uint8Array, off: number, len: number): Uint8Array {
 
 /**
  * Parse a RecordBatch message and produce raw Column objects owned by wasm memory.
- * Caller must free these columns if they won't be handed to DataFrame.
+ *
+ * CP.1 fast paths (ABI §12):
+ *   - utf8 dict-encoded: `writeDictionaryFromRawBytes` — no TextDecoder/TextEncoder.
+ *   - utf8 plain: `buildDictFromPlainUtf8` (byte-hash dedup) + `writeDictionaryFromRawBytes`.
+ *   - numeric/bool: unchanged — single alloc + TypedArray.set bulk-copy.
+ *
+ * Returns `{ columns, length }`. Caller must free columns that are not adopted
+ * by a DataFrame.
  */
 function parseRecordBatch(
   meta: Uint8Array,
@@ -638,7 +814,7 @@ function parseRecordBatch(
   fields: ArrowField[],
   dicts: Map<number, DictEntry>,
   ctx: MemoryContext,
-): Column[] {
+): { columns: Column[]; length: number } {
   const msg = fbRoot(meta);
   if (msg.getUint8(1, 0) !== MH_RECORD) throw new Error('Arrow: expected RecordBatch');
   const rb = msg.getTable(2);
@@ -657,7 +833,7 @@ function parseRecordBatch(
   let bi = 0;
 
   for (let fi = 0; fi < fields.length; fi++) {
-    const { dtype, dictId, plainUtf8 } = fields[fi]!;
+    const { dtype, dictId } = fields[fi]!;
 
     // Validity buffer (bi)
     const vOff = getBufOff(bi); const vLen = getBufLen(bi); bi++;
@@ -665,19 +841,12 @@ function parseRecordBatch(
 
     if (dtype === 'utf8') {
       if (dictId !== null) {
-        // Dict-encoded: next buffer = i32 indices
+        // ── Dict-encoded fast path (ABI §12): bulk-copy bytes + offsets, no decode/encode ──
         const iOff = getBufOff(bi); bi++;
         const entry = dicts.get(dictId);
         if (!entry) throw new Error(`Arrow: missing dictionary id=${dictId}`);
 
-        // Build our dictionary
-        const dec = new TextDecoder();
-        const uniques: string[] = [];
-        for (let k = 0; k < entry.count; k++) {
-          const s = entry.offsets[k]!; const e = entry.offsets[k + 1]!;
-          uniques.push(e > s ? dec.decode(entry.bytes.subarray(s, e)) : '');
-        }
-        const dict = writeDictionary(ctx, uniques);
+        const dict = writeDictionaryFromRawBytes(ctx, entry.bytes, entry.offsets, entry.count);
 
         const dataPtr = ctx.mod.alloc(Math.max(rowLen * 4, 1));
         const idxView = ctx.viewOf({ ptr: dataPtr, length: rowLen, dtype: 'i32' }) as Int32Array;
@@ -694,26 +863,20 @@ function parseRecordBatch(
         columns.push({ dtype: 'utf8', length: rowLen, dataPtr, validityPtr, validityBitOffset: 0, dict, owned: true });
 
       } else {
-        // Plain Utf8: offsets buffer + bytes buffer
+        // ── Plain UTF-8 fast path (ABI §12): byte-hash dedup, no TextDecoder/TextEncoder ──
         const oOff2 = getBufOff(bi); bi++;
         const dOff2 = getBufOff(bi); const dLen2 = getBufLen(bi); bi++;
 
-        const offsets = new Int32Array(body.buffer, body.byteOffset + oOff2, rowLen + 1);
-        const rawBytes = body.subarray(dOff2, dOff2 + dLen2);
-        const dec = new TextDecoder();
+        const arrowOffsets = new Int32Array(body.buffer, body.byteOffset + oOff2, rowLen + 1);
+        const arrowBytes   = body.subarray(dOff2, dOff2 + dLen2);
 
-        // Build dictionary from unique strings
-        const idxMap = new Map<string, number>();
-        const uniques: string[] = [];
-        const indices = new Int32Array(rowLen);
-        for (let k = 0; k < rowLen; k++) {
-          const s = offsets[k]!; const e = offsets[k + 1]!;
-          const str = dec.decode(rawBytes.subarray(s, e));
-          let idx = idxMap.get(str);
-          if (idx === undefined) { idx = uniques.length; uniques.push(str); idxMap.set(str, idx); }
-          indices[k] = idx;
-        }
-        const dict = writeDictionary(ctx, uniques);
+        // Dedup on raw bytes: O(n×avgLen), no JS string allocation in the hot loop.
+        const { dictOffsets, dictBytes, dictCount, indices } =
+          buildDictFromPlainUtf8(arrowBytes, arrowOffsets, rowLen);
+
+        // Bulk-copy the compact dict into wasm (no TextEncoder).
+        const dict = writeDictionaryFromRawBytes(ctx, dictBytes, dictOffsets, dictCount);
+
         const dataPtr = ctx.mod.alloc(Math.max(rowLen * 4, 1));
         (ctx.viewOf({ ptr: dataPtr, length: rowLen, dtype: 'i32' }) as Int32Array).set(indices);
 
@@ -745,7 +908,7 @@ function parseRecordBatch(
       columns.push({ dtype: 'bool', length: rowLen, dataPtr, validityPtr, validityBitOffset: 0, dict: null, owned: true });
 
     } else {
-      // Numeric: f64, f32, i32, u32
+      // ── Numeric fast path: single alloc + TypedArray.set bulk-copy ──
       const info = DTYPES[dtype];
       const datOff = getBufOff(bi); bi++;
       const dataPtr = ctx.mod.alloc(Math.max(rowLen * info.size, 1));
@@ -765,7 +928,7 @@ function parseRecordBatch(
       columns.push({ dtype, length: rowLen, dataPtr, validityPtr, validityBitOffset: 0, dict: null, owned: true });
     }
   }
-  return columns;
+  return { columns, length: rowLen };
 }
 
 /**
@@ -835,45 +998,43 @@ export function fromArrow(buf: Uint8Array, rt: DfRuntime): DataFrame {
 
   if (!rbMsg) throw new Error('Arrow fromArrow: no RecordBatch found in stream');
 
-  const rawCols = parseRecordBatch(rbMsg.meta, rbMsg.body, fields, dicts, rt.ctx);
+  const { columns: rawCols, length: rowLen } =
+    parseRecordBatch(rbMsg.meta, rbMsg.body, fields, dicts, rt.ctx);
 
-  // Convert raw wasm columns to JS arrays and build DataFrame.
-  // For timestamp columns: rescale to ms if Arrow unit is not MILLISECOND.
-  // For timestamp + date32: preserve tz metadata via FrameOptions.tzs (ADR-010).
-  const colData: Record<string, import('../memory/column.js').ColumnInput> = {};
-  const dtypes: Record<string, DType> = {};
-  const tzMap: Record<string, string> = {};
+  // CP.1 fast path: adopt pre-built wasm columns directly — no JS-array round-trip.
+  //
+  // The general contract: `parseRecordBatch` produced owned wasm columns with
+  // correct dtype/dataPtr/validityPtr/dict. We hand them straight to
+  // `DataFrame._adoptColumns`. The only exception is a non-MILLISECOND Arrow
+  // Timestamp, which must be rescaled via a JS round-trip (rare edge case).
+  const named: Array<{ name: string; col: Column }> = [];
 
   for (let i = 0; i < fields.length; i++) {
     const { name, dtype, tz, arrowUnit } = fields[i]!;
-    let values = columnToArray(rt.ctx, rawCols[i]!) as import('../memory/column.js').ColumnInput;
+    let col = rawCols[i]!;
 
-    // Rescale Arrow Timestamp to ms if the source unit differs from MILLISECOND (ADR-010).
     if (dtype === 'timestamp' && arrowUnit !== undefined && arrowUnit !== TIME_UNIT_MILLI) {
-      values = rescaleTimestampToMs(
-        values as (bigint | null)[],
-        arrowUnit,
-      ) as import('../memory/column.js').ColumnInput;
+      // Rare: rescale non-ms Arrow Timestamp to ms via a JS round-trip (ADR-010).
+      const jsVals = columnToArray(rt.ctx, col) as (bigint | null)[];
+      const rescaled = rescaleTimestampToMs(jsVals, arrowUnit);
+      freeColumn(rt.ctx, col);
+      col = createColumn(rt.ctx, 'timestamp', rescaled as ColumnInput, tz);
+    } else if (dtype === 'timestamp' && tz !== undefined) {
+      // Attach tz metadata (display/accessor only, ADR-010) without touching wasm.
+      col = { ...col, tz };
     }
 
-    colData[name] = values;
-    dtypes[name] = dtype;
-    if (tz) tzMap[name] = tz;
-    // Free the intermediate wasm allocation
-    freeRawColumn(rt.ctx, rawCols[i]!);
+    named.push({ name, col });
   }
 
-  const opts: FrameOptions = { runtime: rt, dtypes, tzs: tzMap };
-  return DataFrame.fromColumns(colData, opts);
+  return DataFrame._adoptColumns(rt, named, rowLen);
 }
 
 // ---------------------------------------------------------------------------
 // Free a raw (owned) column that won't be adopted by a DataFrame
 // ---------------------------------------------------------------------------
 
-import { freeDictionary } from '../memory/dictionary.js';
 import { freeColumn } from '../memory/column.js';
+// freeDictionary is re-exported from memory/index but not needed directly here —
+// freeColumn already calls freeDictionary for utf8 columns.
 
-function freeRawColumn(ctx: MemoryContext, col: Column): void {
-  freeColumn(ctx, col);
-}
