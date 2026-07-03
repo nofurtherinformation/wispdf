@@ -1,13 +1,13 @@
 {
   "entryPoints": ["src/index.ts"],
   "out": "docs/api",
-  "name": "wispdf",
+  "name": "databonk",
   "readme": "README.md",
   "includeVersion": true,
   "excludePrivate": true,
   "excludeInternal": true,
   "skipErrorChecking": true,
   "navigationLinks": {
-    "GitHub": "TODO: https://github.com/TODO/wispdf"
+    "GitHub": "TODO: https://github.com/TODO/databonk"
   }
 }

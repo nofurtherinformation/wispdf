@@ -1,13 +1,13 @@
 {
-  "name": "wispdf-node-quickstart",
+  "name": "databonk-node-quickstart",
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Node.js quickstart for wispdf — exercises the README quickstart against the built package.",
+  "description": "Node.js quickstart for databonk — exercises the README quickstart against the built package.",
   "scripts": {
     "start": "node quickstart.mjs"
   },
   "dependencies": {
-    "wispdf": "file:../.."
+    "databonk": "file:../.."
   }
 }

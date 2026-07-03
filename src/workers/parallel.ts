@@ -494,7 +494,7 @@ export async function enableThreads(
   /* ---- isolation detection (ADR-006) ---- */
   if (!isIsolated()) {
     console.warn(
-      '[wispdf] enableThreads: SharedArrayBuffer is not available or ' +
+      '[databonk] enableThreads: SharedArrayBuffer is not available or ' +
       'cross-origin isolation is missing (COOP/COEP headers required in browsers). ' +
       'Parallel mode not activated. See docs/threads.md for setup instructions.',
     );

@@ -1,5 +1,5 @@
 /**
- * wispdf/parquet — Parquet I/O subpath export (ADR-011).
+ * databonk/parquet — Parquet I/O subpath export (ADR-011).
  *
  * Exported API:
  *   readParquet(bytes, rt)  → Promise<DataFrame>   (async; hyparquet reader)
@@ -10,7 +10,7 @@
  *   compression: snappy and uncompressed
  *   utf8:        dictionary-encoded when beneficial
  *   timestamp:   INT64 + TIMESTAMP(MILLIS, isAdjustedToUTC); tz round-trips in
- *                file key_value_metadata as "wispdf:tz:<colname>"
+ *                file key_value_metadata as "databonk:tz:<colname>"
  *
  * Anything outside the profile raises a clear "unsupported" Error naming the feature —
  * never a silent wrong result (ADR-011 §Consequences).
@@ -36,7 +36,7 @@
 import { parquetMetadataAsync, parquetRead, parquetSchema } from 'hyparquet/src/index.js';
 import { parquetWriteBuffer } from 'hyparquet-writer/src/index.js';
 
-// Internal wispdf imports (NOT re-exported — parquet subpath does not widen
+// Internal databonk imports (NOT re-exported — parquet subpath does not widen
 // the main-entry surface).
 import { DataFrame } from '../frame/dataframe.js';
 import type { DfRuntime } from '../frame/runtime.js';
@@ -113,7 +113,7 @@ interface ColInfo {
 
 /**
  * Map one Parquet SchemaElement (a direct child of the root, i.e. a column)
- * to a wispdf ColInfo.  Throws a descriptive "unsupported" error for anything
+ * to a databonk ColInfo.  Throws a descriptive "unsupported" error for anything
  * outside the ADR-011 profile.
  */
 function mapSchemaElement(
@@ -132,14 +132,14 @@ function mapSchemaElement(
     const ltType = lt?.['type'] as string | undefined;
     if (ltType === 'LIST')
       throw new Error(
-        `unsupported Parquet feature: LIST column '${name}' — nested/repeated types are not supported by wispdf/parquet (ADR-011)`,
+        `unsupported Parquet feature: LIST column '${name}' — nested/repeated types are not supported by databonk/parquet (ADR-011)`,
       );
     if (ltType === 'MAP')
       throw new Error(
         `unsupported Parquet feature: MAP column '${name}' — nested types are not supported (ADR-011)`,
       );
     throw new Error(
-      `unsupported Parquet feature: nested/group column '${name}' — wispdf/parquet only supports flat columns (ADR-011)`,
+      `unsupported Parquet feature: nested/group column '${name}' — databonk/parquet only supports flat columns (ADR-011)`,
     );
   }
   if (rep === 'REPEATED')
@@ -164,7 +164,7 @@ function mapSchemaElement(
         return { name, dtype: 'date32' };
       if (ltType === 'DECIMAL' || ct === 'DECIMAL')
         throw new Error(
-          `unsupported Parquet feature: DECIMAL column '${name}' (ADR-011 — only the wispdf numeric dtypes are supported)`,
+          `unsupported Parquet feature: DECIMAL column '${name}' (ADR-011 — only the databonk numeric dtypes are supported)`,
         );
       // INTEGER logical type: check signedness
       if (ltType === 'INTEGER') {
@@ -262,10 +262,10 @@ function mergeChunks(parts: DecodedChunk[]): ColumnInput {
 // ---------------------------------------------------------------------------
 
 /**
- * Read a Parquet file into a wispdf {@link DataFrame}.
+ * Read a Parquet file into a databonk {@link DataFrame}.
  *
  * @param bytes - The raw Parquet file bytes.
- * @param rt    - The wispdf runtime (from `init()` / `defaultRuntime()`).
+ * @param rt    - The databonk runtime (from `init()` / `defaultRuntime()`).
  *
  * @throws {Error} if the file uses any out-of-profile feature (ADR-011):
  *   compression other than SNAPPY/UNCOMPRESSED, nested/repeated columns,
@@ -287,7 +287,7 @@ export async function readParquet(
       if (!SUPPORTED_CODECS.has(codec)) {
         throw new Error(
           `unsupported Parquet compression codec: '${codec}'. ` +
-          `wispdf/parquet supports only SNAPPY and UNCOMPRESSED (ADR-011). ` +
+          `databonk/parquet supports only SNAPPY and UNCOMPRESSED (ADR-011). ` +
           `For GZIP/ZSTD/BROTLI/LZ4, re-compress the file first.`,
         );
       }
@@ -297,14 +297,14 @@ export async function readParquet(
   // 3. Extract per-column tz from file key_value_metadata (ADR-011 round-trip).
   const tzByCol = new Map<string, string>();
   const kvMeta = (metadata as unknown as { key_value_metadata?: Array<{ key: string; value: string }> }).key_value_metadata ?? [];
-  const TZ_PREFIX = 'wispdf:tz:';
+  const TZ_PREFIX = 'databonk:tz:';
   for (const { key, value } of kvMeta) {
     if (key.startsWith(TZ_PREFIX) && value) {
       tzByCol.set(key.slice(TZ_PREFIX.length), value);
     }
   }
 
-  // 4. Parse the schema — map each column to a wispdf dtype (throws on unsupported).
+  // 4. Parse the schema — map each column to a databonk dtype (throws on unsupported).
   const schemaTree = parquetSchema(metadata);
   // Use 'unknown' cast to avoid SchemaTree structural typing issues with exactOptionalPropertyTypes.
   const colInfos: ColInfo[] = (schemaTree.children as unknown as Array<{ element: Record<string, unknown> }>).map(
@@ -327,7 +327,7 @@ export async function readParquet(
     },
   } as Parameters<typeof parquetRead>[0]);
 
-  // 6. Build wispdf columns from the accumulated chunks.
+  // 6. Build databonk columns from the accumulated chunks.
   const namedCols: NamedColumn[] = [];
   for (const { name, dtype, tz } of colInfos) {
     const parts = chunksByName.get(name) ?? [];
@@ -365,7 +365,7 @@ interface ColSrc {
 }
 
 /**
- * Build the Parquet schema element and JS data array for one wispdf column.
+ * Build the Parquet schema element and JS data array for one databonk column.
  * Returns `{ el, data, tzKey }` where `tzKey` is set for timestamp-with-tz columns
  * so the caller can add it to `kvMetadata`.
  */
@@ -440,14 +440,14 @@ function buildColWrite(
         },
       };
       if (col.tz) {
-        tzKey = { key: `wispdf:tz:${colName}`, value: col.tz };
+        tzKey = { key: `databonk:tz:${colName}`, value: col.tz };
       }
       break;
     }
     default: {
       // Should not happen for supported dtypes, but be explicit.
       const d: never = col.dtype;
-      throw new Error(`unsupported wispdf dtype for Parquet write: '${String(d)}'`);
+      throw new Error(`unsupported databonk dtype for Parquet write: '${String(d)}'`);
     }
   }
 
@@ -460,9 +460,9 @@ function buildColWrite(
 // ---------------------------------------------------------------------------
 
 /**
- * Encode a wispdf {@link DataFrame} as a Parquet file (Uint8Array).
+ * Encode a databonk {@link DataFrame} as a Parquet file (Uint8Array).
  *
- * All wispdf dtypes are supported (ADR-011 §supported-profile).
+ * All databonk dtypes are supported (ADR-011 §supported-profile).
  * Only `'snappy'` and `'uncompressed'` are valid `compression` values —
  * any other string throws a clear "unsupported" error.
  *
@@ -478,7 +478,7 @@ export function writeParquet(
   if (compression !== 'snappy' && compression !== 'uncompressed') {
     throw new Error(
       `unsupported Parquet compression codec: '${compression}'. ` +
-      `wispdf/parquet writeParquet only accepts 'snappy' or 'uncompressed' (ADR-011).`,
+      `databonk/parquet writeParquet only accepts 'snappy' or 'uncompressed' (ADR-011).`,
     );
   }
 

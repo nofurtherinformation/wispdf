@@ -1,9 +1,9 @@
 /**
- * wispdf Vite demo — 100K-row pipeline with table preview.
+ * databonk Vite demo — 100K-row pipeline with table preview.
  *
  * Wasm loading strategy: the postinstall script copies scalar.wasm + simd.wasm
  * to public/ so Vite serves them at / regardless of build target. For production
- * apps, prefer the `new URL('../node_modules/wispdf/dist/simd.wasm', import.meta.url)`
+ * apps, prefer the `new URL('../node_modules/databonk/dist/simd.wasm', import.meta.url)`
  * pattern so Vite hashes and copies the asset automatically (see docs/bundlers.md).
  */
 
@@ -14,7 +14,7 @@ import {
   DataFrame,
   col,
   scope,
-} from 'wispdf';
+} from 'databonk';
 
 const statusEl = document.getElementById('status');
 const resultEl = document.getElementById('result');

@@ -12,7 +12,7 @@ ADR-010) to ship as throwing stubs.
 
 ## Decision
 - Main-entry budget: **30 KB gzipped** (`scripts/check-size.mjs`). Wasm budgets unchanged (75 KB each).
-- Parquet stays out of the main entry entirely (`wispdf/parquet` subpath, ADR-011), as do threads (`wispdf/workers`).
+- Parquet stays out of the main entry entirely (`databonk/parquet` subpath, ADR-011), as do threads (`databonk/workers`).
 - `sideEffects:false` + ESM mean tree-shaking consumers who import the v1 profile pay ~v1 cost; the gate measures the worst-case full import.
 
 ## Consequences

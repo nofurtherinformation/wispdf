@@ -1,5 +1,5 @@
 /**
- * Arrow IPC stream encode/decode for wispdf DataFrames (ADR-002, ADR-009, ADR-010).
+ * Arrow IPC stream encode/decode for databonk DataFrames (ADR-002, ADR-009, ADR-010).
  *
  * Our layout is Arrow-compatible by design:
  *   - Numeric columns: contiguous TypedArray → Arrow primitive buffer (zero-transform).
@@ -537,9 +537,9 @@ function parseSchema(meta: Uint8Array): ArrowField[] {
         if (bits === 64) {
           if (!signed) throw new Error(
             `Arrow fromArrow: unsupported Arrow type UInt64. ` +
-            `wispdf supports Int64(signed) as 'i64'.`,
+            `databonk supports Int64(signed) as 'i64'.`,
           );
-          dtype = 'i64'; // ADR-009: Arrow Int64(signed) → wispdf i64
+          dtype = 'i64'; // ADR-009: Arrow Int64(signed) → databonk i64
         } else {
           dtype = (bits <= 32 && !signed) ? 'u32' : 'i32';
         }
@@ -562,14 +562,14 @@ function parseSchema(meta: Uint8Array): ArrowField[] {
         if (unit !== DATE_UNIT_DAY) throw new Error(
           `Arrow fromArrow: unsupported Date unit ${unit} (only Date32(DAY)=0 is supported).`,
         );
-        dtype = 'date32'; // ADR-010: Arrow Date(DAY) → wispdf date32
+        dtype = 'date32'; // ADR-010: Arrow Date(DAY) → databonk date32
         break;
       }
       case TYPE_TIMESTAMP: {
         // Timestamp.unit FlatBuffers default = SECOND (0). timezone (field 1) is optional.
         const unit = typeT?.getInt16(0, TIME_UNIT_SECOND) ?? TIME_UNIT_SECOND;
         const tzStr = typeT?.getString(1) ?? undefined;
-        dtype = 'timestamp'; // ADR-010: Arrow Timestamp(unit, tz?) → wispdf timestamp
+        dtype = 'timestamp'; // ADR-010: Arrow Timestamp(unit, tz?) → databonk timestamp
         arrowUnit = unit;
         tz = tzStr;
         break;
@@ -771,7 +771,7 @@ function parseRecordBatch(
 /**
  * Rescale Arrow Timestamp column values to milliseconds.
  *
- * Arrow Timestamp can carry any TimeUnit. wispdf stores timestamps as ms (ADR-010).
+ * Arrow Timestamp can carry any TimeUnit. databonk stores timestamps as ms (ADR-010).
  * - SECOND → ms: ×1000 with saturation-to-null on i64 overflow (documented).
  *   Safe range: |seconds| ≤ 9_223_372_036_854_775 (≈ ±292 million years). Out-of-range
  *   values (which would overflow i64 when multiplied by 1000) become null.

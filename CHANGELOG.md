@@ -19,7 +19,7 @@ the v1 profile through a tree-shaking bundler continue to pay approximately v1 c
 - ADR-010 (temporals): `date32` (i32 days since epoch) + `timestamp` (i64 UTC ms);
   tz as column metadata only (no wasm; reuses i32/i64 kernels); ISO 8601 weekday
   numbering (Mon=1…Sun=7); `dt` accessor proxy over the typed-array view.
-- ADR-011 (parquet): `wispdf/parquet` subpath; runtime deps (`hyparquet` +
+- ADR-011 (parquet): `databonk/parquet` subpath; runtime deps (`hyparquet` +
   `hyparquet-writer`) confined to the subpath; main entry stays dep-free ≤ 30 KB.
 - `contracts/dtypes.md` §6–§12 (full v2 cast matrix, temporal-arith restriction table,
   dt accessors); `contracts/wasm-abi.md` §10–§11; `contracts/memory.d.ts` extended.
@@ -74,16 +74,16 @@ the v1 profile through a tree-shaking bundler continue to pay approximately v1 c
   `dtypes: { col: 'i64' | 'date32' | 'timestamp' }` parse paths.
 - 1099 tests green (scalar + SIMD builds); main entry 25.4 KB gz (≤ 30 KB gate).
 
-### v2.7 — Parquet subpath (`wispdf/parquet`)
+### v2.7 — Parquet subpath (`databonk/parquet`)
 
 - `readParquet(bytes, rt)` (async) + `writeParquet(df, opts?)` (sync) for all 9
   supported dtypes: `f64 f32 i32 u32 i64 bool utf8 date32 timestamp`.
 - Snappy + uncompressed; null validity; dictionary-encoded `utf8`; `timestamp` tz
-  round-trips in file `key_value_metadata` (`wispdf:tz:<colname>`).
+  round-trips in file `key_value_metadata` (`databonk:tz:<colname>`).
 - Out-of-profile inputs (gzip/zstd/brotli/lz4, INT96, DECIMAL, nested/repeated,
   `FIXED_LEN_BYTE_ARRAY`) raise a clear, specific "unsupported" error.
 - Runtime deps (`hyparquet 1.26.2` + `hyparquet-writer 0.16.1`) confined to the
-  subpath; main entry not touched. Subpath ≈ 20.9 KB gz (wispdf adapter +
+  subpath; main entry not touched. Subpath ≈ 20.9 KB gz (databonk adapter +
   hyparquet/hyparquet-writer as external imports; not bundled into the tarball).
 - `parquet-wasm 0.7.2` as a devDep test oracle; never shipped.
 
@@ -111,7 +111,7 @@ the v1 profile through a tree-shaking bundler continue to pay approximately v1 c
 
 ## [0.1.0] — 2026-07-02
 
-First public release of **wispdf** — a columnar WASM dataframe library for JavaScript.
+First public release of **databonk** — a columnar WASM dataframe library for JavaScript.
 
 ### Phase 0 — Foundation & language spike
 
@@ -157,7 +157,7 @@ First public release of **wispdf** — a columnar WASM dataframe library for Jav
 ### Phase 5 — Parallel mode
 
 - `simd-threads.wasm` build (nightly Rust, `+atomics +bulk-memory`, imported `SharedArrayBuffer`-backed memory).
-- `enableThreads({ workers })` — exported from `wispdf/workers` subpath entry (separate bundle to keep main entry under 25 KB gate).
+- `enableThreads({ workers })` — exported from `databonk/workers` subpath entry (separate bundle to keep main entry under 25 KB gate).
 - Chunk dispatch: elementwise ops write directly into shared memory; reductions combine partial sums left-to-right (deterministic, non-bit-identical to single-thread for f64 — documented deviation).
 - Worker crash/timeout recovery: failed workers are terminated and respawned automatically.
 - Graceful no-op when `crossOriginIsolated` is absent (browser without COOP/COEP).
@@ -167,7 +167,7 @@ First public release of **wispdf** — a columnar WASM dataframe library for Jav
 
 - **I/O (Agent E):** CSV reader (type inference, streaming-friendly), JSON records (`fromJSON`/`toJSON`), Arrow IPC (`fromArrow`/`toArrow`) verified against `apache-arrow` (dev-only dep; no runtime dep).
 - **Release (Agent F — this release):**
-  - Package name `wispdf`, version `0.1.0`, license MIT, `sideEffects: false`.
+  - Package name `databonk`, version `0.1.0`, license MIT, `sideEffects: false`.
   - Exports map with split `import`/`require` + per-condition `.d.ts`/`.d.cts` types (attw-clean).
   - `README.md` with honest benchmark table, feature matrix, quickstart, bundler section.
   - `docs/bundlers.md` — Vite, webpack, Node, inline-base64 fallback.
@@ -193,4 +193,4 @@ First public release of **wispdf** — a columnar WASM dataframe library for Jav
 
 ---
 
-[0.1.0]: https://github.com/TODO/wispdf/releases/tag/v0.1.0
+[0.1.0]: https://github.com/TODO/databonk/releases/tag/v0.1.0

@@ -22,7 +22,7 @@ existing behaviour is unaffected.
 ## Quick start
 
 ```typescript
-import { init, DataFrame, enableThreads } from 'wispdf';
+import { init, DataFrame, enableThreads } from 'databonk';
 
 await init(); // load the standard single-thread wasm
 
@@ -38,7 +38,7 @@ if (th) {
 ### Node.js script
 
 ```typescript
-import { enableThreads } from 'wispdf';
+import { enableThreads } from 'databonk';
 
 const th = await enableThreads({ workers: 4 });
 if (!th) throw new Error('threads unavailable');

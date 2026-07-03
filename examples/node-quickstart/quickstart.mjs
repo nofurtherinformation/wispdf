@@ -1,5 +1,5 @@
 /**
- * wispdf node-quickstart — mirrors the README quickstart exactly, plus v2 additions.
+ * databonk node-quickstart — mirrors the README quickstart exactly, plus v2 additions.
  *
  * Exercises:
  *   fromColumns → filter (expression path) → groupby → agg → toRecords
@@ -9,14 +9,14 @@
  *   lambda escape hatch (SLOW PATH — labeled clearly per ADR-003)
  *   v2: i64/BigInt columns — construction, arithmetic, reductions
  *   v2: temporal dtypes — date32/timestamp, dt accessors, tz metadata
- *   v2: Parquet I/O — wispdf/parquet subpath (readParquet/writeParquet)
+ *   v2: Parquet I/O — databonk/parquet subpath (readParquet/writeParquet)
  *
  * Run: node quickstart.mjs
  * (From the repo root in Docker: npm run build && cd examples/node-quickstart && npm install && node quickstart.mjs)
  */
 
-import { init, DataFrame, col, lit, scope, fromCSV, fromArrow, toArrow, defaultRuntime } from 'wispdf';
-import { readParquet, writeParquet } from 'wispdf/parquet';
+import { init, DataFrame, col, lit, scope, fromCSV, fromArrow, toArrow, defaultRuntime } from 'databonk';
+import { readParquet, writeParquet } from 'databonk/parquet';
 
 // ── 1. Init ────────────────────────────────────────────────────────────────
 await init();
@@ -201,7 +201,7 @@ dfTs.dispose();
 console.log('✓ temporal dtypes verified (date32, timestamp, dt accessors, tz, restricted arithmetic)');
 
 // ── 10. Parquet I/O (v2, ADR-011) ─────────────────────────────────────────
-console.log('\n--- Parquet I/O (wispdf/parquet subpath) ---');
+console.log('\n--- Parquet I/O (databonk/parquet subpath) ---');
 
 const rt2 = defaultRuntime();
 

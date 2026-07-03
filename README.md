@@ -1,9 +1,9 @@
-# wispdf
+# databonk
 
 Columnar dataframe library for JavaScript — pandas-familiar API, WebAssembly-accelerated kernels, zero-copy typed-array views, dual ESM/CJS, TypeScript types.
 
 ```
-npm install wispdf
+npm install databonk
 ```
 
 Works in **Node.js ≥ 18**, **Vite**, and **webpack** without configuration gymnastics.
@@ -12,10 +12,10 @@ v2 surface including i64 + temporals; see [Bundle sizes](#bundle-sizes) and [ADR
 
 ---
 
-## Why wispdf?
+## Why databonk?
 
 Most JS "dataframe" libraries either wrap pandas in WASM (giant binary) or operate
-row-by-row over plain objects (slow).  wispdf takes a different path:
+row-by-row over plain objects (slow).  databonk takes a different path:
 
 - **Columns live in WASM linear memory.** JS holds zero-copy `TypedArray` views over
   those buffers — no marshalling overhead on the hot path.
@@ -25,7 +25,7 @@ row-by-row over plain objects (slow).  wispdf takes a different path:
   pandas' index-alignment surprises.
 - **Opt-in threads** via `enableThreads()` (COOP/COEP required in browser; always
   available in Node). 3.3–3.5× speedup on 4 workers for 10M-row reductions.
-- **I/O** — CSV, JSON records, Arrow IPC, and now Parquet (`wispdf/parquet` subpath).
+- **I/O** — CSV, JSON records, Arrow IPC, and now Parquet (`databonk/parquet` subpath).
 - **v2 dtypes** — `i64`/BigInt columns, `date32`, `timestamp` with timezone metadata,
   and `dt` accessor proxy (`.year()`, `.month()`, `.weekday()`, …).
 
@@ -45,7 +45,7 @@ i64, dates/timestamps/timezones, and Parquet I/O **shipped in v0.2.0**.
 ## Install
 
 ```
-npm install wispdf
+npm install databonk
 ```
 
 Peer-required: **Node.js ≥ 18** (or a modern browser with WebAssembly support).
@@ -55,7 +55,7 @@ Peer-required: **Node.js ≥ 18** (or a modern browser with WebAssembly support)
 ## Quickstart
 
 ```typescript
-import { init, DataFrame, col } from 'wispdf';
+import { init, DataFrame, col } from 'databonk';
 
 // Load the wasm runtime once at startup (auto-detects SIMD)
 await init();
@@ -88,7 +88,7 @@ df.dispose();
 ### scope() — automatic cleanup
 
 ```typescript
-import { scope } from 'wispdf';
+import { scope } from 'databonk';
 
 const result = scope(() => {
   const filtered = df.filter(col('value').gt(5));
@@ -101,7 +101,7 @@ const result = scope(() => {
 ### I/O
 
 ```typescript
-import { init, DataFrame, fromCSV, fromArrow, toArrow, fromJSON, toJSON } from 'wispdf';
+import { init, DataFrame, fromCSV, fromArrow, toArrow, fromJSON, toJSON } from 'databonk';
 
 // Load the wasm runtime once at startup (needed for fromArrow)
 const rt = await init();
@@ -131,7 +131,7 @@ cost appears only at scalar crossings (literals, reduction returns, row-proxy ac
 ### Construction
 
 ```typescript
-import { init, DataFrame, col, lit } from 'wispdf';
+import { init, DataFrame, col, lit } from 'databonk';
 
 await init();
 
@@ -161,7 +161,7 @@ Use a `bigint` literal for values near or above 2^53.
 ### Arithmetic, reductions, and precision caveat
 
 ```typescript
-import { init, DataFrame, col, lit } from 'wispdf';
+import { init, DataFrame, col, lit } from 'databonk';
 
 await init();
 
@@ -225,7 +225,7 @@ validity bit, never a sentinel day/ms.
 ### Construction
 
 ```typescript
-import { init, DataFrame, col } from 'wispdf';
+import { init, DataFrame, col } from 'databonk';
 
 await init();
 
@@ -261,7 +261,7 @@ Field extraction runs entirely in JS over the typed-array view — no `Date` obj
 UTC path uses integer civil-from-days math; tz-aware path uses a cached `Intl.DateTimeFormat`.
 
 ```typescript
-import { init, DataFrame, col } from 'wispdf';
+import { init, DataFrame, col } from 'databonk';
 
 await init();
 
@@ -322,11 +322,11 @@ and any temporal ⊕ float all throw a descriptive error.
 > **ADR-011** — reverses the v1 non-goal "Parquet I/O (Arrow IPC only)".
 
 Parquet support ships as a **separate subpath** so the main entry stays dep-free
-and under 30 KB. Only importing `wispdf/parquet` pulls in the runtime dependencies.
+and under 30 KB. Only importing `databonk/parquet` pulls in the runtime dependencies.
 
 ```typescript
-import { init, defaultRuntime } from 'wispdf';
-import { readParquet, writeParquet } from 'wispdf/parquet';
+import { init, defaultRuntime } from 'databonk';
+import { readParquet, writeParquet } from 'databonk/parquet';
 
 await init();
 const rt = defaultRuntime();
@@ -343,7 +343,7 @@ dfP.dispose();
 
 ### Supported dtype profile (ADR-011)
 
-| wispdf dtype | Parquet physical / logical |
+| databonk dtype | Parquet physical / logical |
 |---|---|
 | `f64` | `DOUBLE` |
 | `f32` | `FLOAT` |
@@ -366,14 +366,14 @@ compression; `INT96` timestamps; nested/repeated (`LIST`/`MAP`/`STRUCT`) columns
 
 Runtime dependencies (`hyparquet 1.26.2` + `hyparquet-writer 0.16.1`) are declared in
 `package.json` `"dependencies"` and imported as external modules at runtime — they are
-**not bundled into the tarball**. They install alongside wispdf automatically. The main
+**not bundled into the tarball**. They install alongside databonk automatically. The main
 entry (`.`) has zero runtime dependencies and is not affected.
 
 ---
 
 ## Expression API vs lambda escape hatch
 
-wispdf has two filter/map styles:
+databonk has two filter/map styles:
 
 ### Expression path (fast — WASM-compiled)
 
@@ -413,14 +413,14 @@ Measured in **Docker (Debian bookworm), Node v22.23.1, Linux** (single thread, S
 Numbers are medians of 3 independent fresh runs at 1M rows.
 Source: [`bench/baselines/e2e-v1.json`](bench/baselines/e2e-v1.json).
 
-| Operation | wispdf (ms) | Arquero (ms) | Ratio |
+| Operation | databonk (ms) | Arquero (ms) | Ratio |
 |---|---:|---:|---:|
 | filter → groupby → sum (pipeline) | 12.3 | 45.3 | **3.7× faster** |
 | join (inner, string key) | 68.6 | 120.6 | **1.8× faster** |
 | sortValues (f64, 1M rows) | 145.3 | 248.9 | **1.7× faster** |
 
 > **Caveats:** Arquero times include `.objects()` materialisation (that's what its
-> pipeline naturally produces); wispdf times do not materialise to JS objects.
+> pipeline naturally produces); databonk times do not materialise to JS objects.
 > Results vary by machine, Node version, dataset shape, and JIT warm-up.
 > Run `node bench/e2e/pipeline.mjs` after `npm run build` to reproduce.
 
@@ -464,7 +464,7 @@ Gzipped, 0.2.0 build (Docker, Debian bookworm, Node v22.23.1, 2026-07-03):
 | `dist/simd.wasm` | 22.1 KB | |
 | `dist/scalar.wasm` (fallback) | 17.4 KB | |
 | `dist/simd-threads.wasm` (threads opt-in) | 21.9 KB | |
-| `dist/parquet.js` (`wispdf/parquet` ESM) | 20.9 KB | hyparquet + hyparquet-writer as external imports; not bundled |
+| `dist/parquet.js` (`databonk/parquet` ESM) | 20.9 KB | hyparquet + hyparquet-writer as external imports; not bundled |
 
 The ADR-012 budget for the main entry is **30 KB gz**. The 27.0 KB reading is with the full
 v2 surface imported. Consumers who tree-shake to a v1-profile import (no i64/temporal/parquet)
@@ -490,7 +490,7 @@ pay approximately the v1 entry cost via their bundler's dead-code elimination.
 | SIMD kernels (auto-detected) | yes | yes |
 | Opt-in worker threads (`enableThreads()`) | yes | yes |
 | CSV / JSON / Arrow IPC I/O | yes | yes |
-| Parquet I/O (`wispdf/parquet` subpath) | no | **yes (ADR-011)** |
+| Parquet I/O (`databonk/parquet` subpath) | no | **yes (ADR-011)** |
 | Chunked / out-of-core columns | no | planned |
 | Lazy query optimizer | no | planned |
 | `pandas.Index` / alignment | no | not planned |
@@ -505,7 +505,7 @@ Requires `SharedArrayBuffer`. In Node ≥ 18 this is always available. In the
 browser you must enable cross-origin isolation (COOP/COEP headers).
 
 ```typescript
-import { enableThreads } from 'wispdf/workers';
+import { enableThreads } from 'databonk/workers';
 
 const th = await enableThreads({ workers: 4 });
 if (!th) throw new Error('threads unavailable — check COOP/COEP headers');

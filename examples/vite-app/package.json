@@ -1,8 +1,8 @@
 {
-  "name": "wispdf-vite-app",
+  "name": "databonk-vite-app",
   "version": "0.0.1",
   "private": true,
-  "description": "Minimal Vite app exercising wispdf — 100K-row pipeline with table preview.",
+  "description": "Minimal Vite app exercising databonk — 100K-row pipeline with table preview.",
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/copy-wasm.mjs",
@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "wispdf": "file:../.."
+    "databonk": "file:../.."
   },
   "devDependencies": {
     "vite": "^6.0.0"

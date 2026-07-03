@@ -23,18 +23,18 @@ its zero-dependency guarantee**.
 
 ## Decision
 
-Parquet support ships **only** as a subpath export, **`wispdf/parquet`**, with runtime
+Parquet support ships **only** as a subpath export, **`databonk/parquet`**, with runtime
 dependencies permitted **solely** in that subpath.
 
 ### Packaging & dependency scope
 
 - **Main entry (`.`) stays dependency-free and ≤ 25 KB gzipped.** It gains **no**
   Parquet code and **no** new dependencies. The size gate on `dist/index.js`
-  (`status.md` gate table) is unchanged. This mirrors the existing `wispdf/workers`
+  (`status.md` gate table) is unchanged. This mirrors the existing `databonk/workers`
   subpath precedent (a subpath entry keeps the main bundle small).
-- **`wispdf/parquet`** is a new `exports` map entry (import/require + `types`, and a
+- **`databonk/parquet`** is a new `exports` map entry (import/require + `types`, and a
   `typesVersions` alias for node10, matching the `workers` subpath). Only importing
-  `wispdf/parquet` pulls the Parquet dependencies into a bundle.
+  `databonk/parquet` pulls the Parquet dependencies into a bundle.
 - **Runtime dependencies (subpath only):**
   - **`hyparquet`** — the reader. Ships a **native Snappy** decompressor
     (`hyparquet/src/snappy.js`), so Snappy read needs **no** extra codec dependency.
@@ -58,17 +58,17 @@ dependencies permitted **solely** in that subpath.
 | **reader + writer (the shipped subpath profile)** | 100,544 B | **≈ 28.9 KB** (29,555 B) |
 | reader + writer + `hyparquet-compressors` (rejected) | 215,444 B | ≈ 101.7 KB (104,133 B) |
 
-The shipped `wispdf/parquet` subpath is therefore **≈ 29 KB gzipped** of runtime
+The shipped `databonk/parquet` subpath is therefore **≈ 29 KB gzipped** of runtime
 dependency, entirely off the main-entry budget. Adding the full codec set would push it
 past ~100 KB — the concrete reason exotic codecs are excluded rather than bundled.
 
 ### Supported profile (and the failure mode outside it)
 
-`wispdf/parquet` supports, for both read and write:
+`databonk/parquet` supports, for both read and write:
 
 - **dtypes** (via the ADR-009/010 mapping):
 
-  | wispdf dtype | Parquet physical / logical |
+  | databonk dtype | Parquet physical / logical |
   |---|---|
   | `f64` | `DOUBLE` |
   | `f32` | `FLOAT` |
@@ -93,7 +93,7 @@ plain/dictionary/RLE that hyparquet cannot decode.
 ### API shape (detail owned by dh9.7; ADR fixes the contract)
 
 - `readParquet(bytes: Uint8Array | ArrayBuffer): Promise<DataFrame>` — **async**
-  (hyparquet's read path is Promise-based). Builds wispdf columns directly from
+  (hyparquet's read path is Promise-based). Builds databonk columns directly from
   hyparquet's column output (avoid materializing row objects) so the import is
   column-native and zero-copy-friendly into wasm memory.
 - `writeParquet(df: DataFrame, opts?: { compression?: 'snappy' | 'uncompressed' }):
@@ -104,7 +104,7 @@ plain/dictionary/RLE that hyparquet cannot decode.
 ## Consequences
 
 - Zero change to the main-entry size gate or its zero-dependency guarantee; the entire
-  Parquet cost lives behind an explicit `import 'wispdf/parquet'`.
+  Parquet cost lives behind an explicit `import 'databonk/parquet'`.
 - Tree-shaking / bundlers: apps that never import the subpath ship none of the ~29 KB.
 - The supported-profile boundary is a **first-class error surface**, tested against the
   `parquet-wasm` oracle for the in-profile cases and asserted to throw for the

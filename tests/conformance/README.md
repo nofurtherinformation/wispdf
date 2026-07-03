@@ -146,11 +146,11 @@ The `icu_caveat` field on the fixture root documents the compute environment.
 
 ### 2.8 Parquet fixture conventions (`parquet.json`)
 
-The `parquet.json` fixture covers the **`wispdf/parquet` subpath** (ADR-011). Each case has a `layer` field:
+The `parquet.json` fixture covers the **`databonk/parquet` subpath** (ADR-011). Each case has a `layer` field:
 
 | `layer` value | Runner action |
 |---|---|
-| `"parquet_roundtrip"` | Build a wispdf DataFrame from `frame.columns`; call `writeParquet(df, write_opts)` to obtain Parquet bytes; call `readParquet(bytes)` to obtain a second DataFrame; assert every column in the second DataFrame matches `expected.columns` (dtype, nullability, and values). Additionally, validate the written bytes against the `parquet-wasm` oracle: use parquet-wasm to read the bytes and assert the same values. |
+| `"parquet_roundtrip"` | Build a databonk DataFrame from `frame.columns`; call `writeParquet(df, write_opts)` to obtain Parquet bytes; call `readParquet(bytes)` to obtain a second DataFrame; assert every column in the second DataFrame matches `expected.columns` (dtype, nullability, and values). Additionally, validate the written bytes against the `parquet-wasm` oracle: use parquet-wasm to read the bytes and assert the same values. |
 | `"parquet_error"` | If `"op": "write"` is present: call `writeParquet(df, write_opts)` on the supplied `frame` and assert it throws with `error_pattern` as a substring of the message. Otherwise: use the `parquet-wasm` oracle to generate a Parquet file matching `generate_with_oracle` (encoding, compression, data), then call `readParquet(bytes)` and assert it throws with `error_pattern`. The throw must be a descriptive Error — never a silent wrong result (ADR-011 §Consequences). |
 
 **Parquet data encoding in fixtures** follows the same conventions as `i64.json`/`temporal.json`:
@@ -324,4 +324,4 @@ Additional v2 coverage requirements (beyond the v1 list above):
 | `relational.json` | relational | (see file) | Agent D: hash, group_build, join_hash_inner/left | v1 |
 | **`i64.json`** | **i64** | **166** | **All 48 new i64 exports (wasm-abi.md §10): 5 binary + 5 scalar + neg + 6 cmp + 6 scalar-cmp + 10 casts + fill_null + 9 reductions + 5 selection + hash. Plus 4 frame_error cases for safe-int literal throw (ADR-009 §Decision). cast_f64_i64__range_null extended with prevDouble(2^63)=2^63-1024 to close boundary-off-by-ULP gap (verifier correction).** | **v2 (dh9.2)** |
 | **`temporal.json`** | **temporal** | **62** | **date32/timestamp semantic layer: compare/sort/min/max via i32/i64 reuse; restricted arithmetic + null propagation; 9 cast cases incl. 5 negative floor-div; dt accessors (UTC + tz-aware DST boundary); 8 arithmetic-error cases; 4 hash property cases** | **v2 (dh9.2)** |
-| **`parquet.json`** | **parquet** | **18** | **wispdf/parquet subpath (ADR-011): 12 round-trip cases (all 9 supported dtypes individually — f64, f32, i32, u32, i64, bool, utf8, date32, timestamp-UTC, timestamp+tz — plus multi-dtype frame + Snappy); 6 out-of-profile error cases (gzip, zstd, INT96 timestamp, DECIMAL, LIST nested, invalid write codec). parquet-wasm devDep oracle for write validation and out-of-profile file generation.** | **v2 (dh9.2)** |
+| **`parquet.json`** | **parquet** | **18** | **databonk/parquet subpath (ADR-011): 12 round-trip cases (all 9 supported dtypes individually — f64, f32, i32, u32, i64, bool, utf8, date32, timestamp-UTC, timestamp+tz — plus multi-dtype frame + Snappy); 6 out-of-profile error cases (gzip, zstd, INT96 timestamp, DECIMAL, LIST nested, invalid write codec). parquet-wasm devDep oracle for write validation and out-of-profile file generation.** | **v2 (dh9.2)** |

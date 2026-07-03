@@ -39,7 +39,7 @@ in `contracts/dtypes.md` §6–§12, `contracts/wasm-abi.md` §10–§11, and `c
 | dataframe-dh9.4 | v2.4 i64 JS layer: registry, column, expr, frame | TBD | blocked | dh9.3 | `BigInt64Array` column path; bigint boundary; widening lattice in the expr compiler; i64 reductions return bigint. |
 | dataframe-dh9.5 | v2.5 Temporal layer: date32/timestamp, dt accessors, tz metadata | TBD | blocked | dh9.4 | Registry logical→physical token; restricted temporal algebra; JS-side dt accessors (civil-from-days + cached `Intl.DateTimeFormat`); scale-casts; `Column.tz`. No new wasm. |
 | dataframe-dh9.6 | v2.6 Arrow/CSV integration for i64+temporals | Sonnet | done | dh9.5 | Arrow write: i64→Int64, date32→Date[DAY], timestamp→Timestamp[MILLI,tz]. Arrow read: Int64/Date32/Timestamp→dtypes; SECOND/MICRO/NANO rescale to ms with saturation-to-null on overflow. CSV: i64 inference (integer >MAX_SAFE_INTEGER promotes to i64); explicit `dtypes:{col:'i64'|'date32'|'timestamp'}` parse paths; reject ambiguous local-time for timestamp. **1099 tests green (scalar+simd); index.js 25.4 KB gz (≤30 KB gate).** Merged. |
-| dataframe-dh9.7 | v2.7 Parquet subpath: `wispdf/parquet` reader+writer | Sonnet | done | dh9.5 | `src/parquet/index.ts` — `readParquet`+`writeParquet` full ADR-011 profile (9 dtypes, snappy+uncompressed, null validity, tz round-trip via key_value_metadata). tsup entry + package.json exports map + typesVersions updated. 19 conformance tests (12 round-trip, 6 error cases, 1 smoke 1M-row). Main entry 24.46 KB gz (≤30 KB). publint clean; attw green. Deps: hyparquet 1.26.2 + hyparquet-writer 0.16.1 (exact-pinned); parquet-wasm 0.7.2 devDep. Merged. |
+| dataframe-dh9.7 | v2.7 Parquet subpath: `databonk/parquet` reader+writer | Sonnet | done | dh9.5 | `src/parquet/index.ts` — `readParquet`+`writeParquet` full ADR-011 profile (9 dtypes, snappy+uncompressed, null validity, tz round-trip via key_value_metadata). tsup entry + package.json exports map + typesVersions updated. 19 conformance tests (12 round-trip, 6 error cases, 1 smoke 1M-row). Main entry 24.46 KB gz (≤30 KB). publint clean; attw green. Deps: hyparquet 1.26.2 + hyparquet-writer 0.16.1 (exact-pinned); parquet-wasm 0.7.2 devDep. Merged. |
 | dataframe-dh9.8 | v2.8 Release 0.2.0: docs, CHANGELOG, fresh-clone verify | Sonnet | done | gate+gate:bench+check:readme green; publint+attw+dry-run clean; node-quickstart+vite-app green; 27.0 KB gz entry | package.json 0.2.0; CHANGELOG 0.2.0; README v2 sections (i64, temporals, parquet, updated matrix + sizes); check-readme.mjs +parquet path; examples/node-quickstart i64+temporal+parquet; docs/status.md closed. Pack: 27 files, 700.9 KB, 2.9 MB unpacked. hyparquet/hyparquet-writer are external imports (not bundled into tarball). |
 
 ## Gate Definitions
@@ -67,7 +67,7 @@ in `contracts/dtypes.md` §6–§12, `contracts/wasm-abi.md` §10–§11, and `c
 | ADR-008 | Stable kernel ABI | accepted |
 | ADR-009 | i64 / BigInt columns (reverses v1 non-goal) | accepted |
 | ADR-010 | Temporal dtypes: date32, timestamp, tz metadata (reverses v1 non-goal) | accepted |
-| ADR-011 | Parquet I/O via a scoped `wispdf/parquet` subpath (reverses v1 non-goal) | accepted |
+| ADR-011 | Parquet I/O via a scoped `databonk/parquet` subpath (reverses v1 non-goal) | accepted |
 | ADR-012 | JS entry size budget raised to 30 KB gz for v2 surface | accepted |
 
 ## v2 Parking Lot

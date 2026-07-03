@@ -1,5 +1,5 @@
 /**
- * wispdf/parquet conformance + oracle tests (ADR-011).
+ * databonk/parquet conformance + oracle tests (ADR-011).
  *
  * Test structure:
  *   1. parquet_roundtrip — fixture-driven: write → oracle validate → read → compare

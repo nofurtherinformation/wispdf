@@ -1,6 +1,6 @@
 # WASM loading — Vite / webpack / Node.js
 
-wispdf ships three `.wasm` binaries inside the `dist/` directory of the published
+databonk ships three `.wasm` binaries inside the `dist/` directory of the published
 package:
 
 | File | When used |
@@ -21,7 +21,7 @@ No configuration required. The loader resolves the wasm path relative to the
 installed package directory using `import.meta.url`. After `npm install`:
 
 ```typescript
-import { init, DataFrame, col } from 'wispdf';
+import { init, DataFrame, col } from 'databonk';
 
 await init();   // auto-detects SIMD, loads the right wasm
 const df = DataFrame.fromColumns({ x: [1, 2, 3] });
@@ -43,7 +43,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   assetsInclude: ['**/*.wasm'],   // treat .wasm as a URL asset (copies to output)
   optimizeDeps: {
-    exclude: ['wispdf'],           // do not pre-bundle — wispdf uses dynamic import()
+    exclude: ['databonk'],           // do not pre-bundle — databonk uses dynamic import()
   },
 });
 ```
@@ -51,7 +51,7 @@ export default defineConfig({
 Then in your app:
 
 ```typescript
-import { init, DataFrame, col } from 'wispdf';
+import { init, DataFrame, col } from 'databonk';
 await init();
 ```
 
@@ -59,7 +59,7 @@ The loader resolves the `.wasm` URL via `new URL('./scalar.wasm', import.meta.ur
 which Vite handles correctly. If you see a "Failed to fetch" error, confirm:
 
 1. `assetsInclude` covers `.wasm` (or use the `vite-plugin-wasm` plugin).
-2. `optimizeDeps.exclude` lists `'wispdf'`.
+2. `optimizeDeps.exclude` lists `'databonk'`.
 
 ### Inline base64 fallback (no asset pipeline)
 
@@ -68,8 +68,8 @@ If your Vite config cannot serve `.wasm` assets (e.g. a monorepo where the
 `Uint8Array` directly:
 
 ```typescript
-import { useRuntime, runtimeFromExports } from 'wispdf';
-import simdWasmBytes from 'wispdf/dist/simd.wasm?arraybuffer'; // Vite raw import
+import { useRuntime, runtimeFromExports } from 'databonk';
+import simdWasmBytes from 'databonk/dist/simd.wasm?arraybuffer'; // Vite raw import
 
 const { instance } = await WebAssembly.instantiate(simdWasmBytes, {});
 useRuntime(runtimeFromExports(instance.exports, true /* isSIMD */));
@@ -101,7 +101,7 @@ module.exports = {
 Then import and initialise as usual:
 
 ```typescript
-import { init, DataFrame } from 'wispdf';
+import { init, DataFrame } from 'databonk';
 await init();
 ```
 
