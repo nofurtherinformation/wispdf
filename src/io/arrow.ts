@@ -1,11 +1,12 @@
 /**
- * Arrow IPC stream encode/decode for wispdf DataFrames (ADR-002).
+ * Arrow IPC stream encode/decode for wispdf DataFrames (ADR-002, ADR-009, ADR-010).
  *
  * Our layout is Arrow-compatible by design:
  *   - Numeric columns: contiguous TypedArray → Arrow primitive buffer (zero-transform).
  *   - Validity bitmaps: LSB-first, 1=valid — already Arrow format (zero-transform).
  *   - utf8 columns: i32 indices + (i32 offsets + u8 bytes) dict → Arrow Dict<Int32, Utf8>.
  *   - bool: u8[n] per-element → bit-pack to Arrow's 1-bit-per-element format (one transform).
+ *   - i64 → Arrow Int(64, signed); date32 → Arrow Date(DAY); timestamp → Arrow Timestamp(MILLI, tz?).
  *
  * IPC stream per message: [int32 -1] [int32 meta_size] [meta bytes, pad→8B] [body bytes, pad→8B]
  * EOS: [int32 -1] [int32 0]
@@ -19,9 +20,12 @@
  *   DictionaryEncoding: id(0), indexType(1), isOrdered(2)
  *   Int:              bitWidth(0), isSigned(1)
  *   FloatingPoint:    precision(0)
+ *   Date:             unit(0) — DateUnit: DAY=0, MILLISECOND=1 (FlatBuffers default=1)
+ *   Timestamp:        unit(0) — TimeUnit: SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3;
+ *                     timezone(1) — optional IANA tz string
  *
  * MessageHeader union tags: Schema=1, DictionaryBatch=2, RecordBatch=3
- * Type union tags:          Int=2, FloatingPoint=3, Utf8=5, Bool=6, LargeUtf8=20
+ * Type union tags:          Int=2, FloatingPoint=3, Utf8=5, Bool=6, Date=8, Timestamp=10, LargeUtf8=20
  * MetadataVersion V5=4
  * FloatingPoint.Precision: HALF=0, SINGLE=1, DOUBLE=2
  */
@@ -47,10 +51,28 @@ const TYPE_INT = 2;
 const TYPE_FLOAT = 3;
 const TYPE_UTF8 = 5;
 const TYPE_BOOL = 6;
+const TYPE_DATE = 8;       // Arrow Date type (Date32/Date64)
+const TYPE_TIMESTAMP = 10; // Arrow Timestamp type
 const TYPE_LARGE_UTF8 = 20;
 const PREC_SINGLE = 1;
 const PREC_DOUBLE = 2;
 const STRUCT16 = 16; // FieldNode / Buffer are each 16 bytes
+
+// DateUnit (Arrow FlatBuffers IDL): DAY=0, MILLISECOND=1; FlatBuffers default = MILLISECOND (1).
+const DATE_UNIT_DAY = 0;
+const DATE_UNIT_MILLI_DEFAULT = 1; // FlatBuffers default for Date.unit — needed to force-write DAY=0
+
+// TimeUnit (Arrow FlatBuffers IDL): SECOND=0(default), MILLISECOND=1, MICROSECOND=2, NANOSECOND=3.
+const TIME_UNIT_SECOND = 0; // FlatBuffers default for Timestamp.unit
+const TIME_UNIT_MILLI = 1;
+const TIME_UNIT_MICRO = 2;
+const TIME_UNIT_NANO = 3;
+
+// Saturation bounds for SECOND→MILLI rescaling (saturation-to-null on overflow, ADR-010).
+// INT64_MAX = 9_223_372_036_854_775_807n; INT64_MAX / 1000n = 9_223_372_036_854_775n (truncate).
+// INT64_MIN = -9_223_372_036_854_775_808n; INT64_MIN / 1000n = -9_223_372_036_854_775n (truncate toward 0).
+const SEC_MS_MAX = 9_223_372_036_854_775n; // max safe seconds before ×1000 overflows i64
+const SEC_MS_MIN = -9_223_372_036_854_775n; // min safe seconds before ×1000 underflows i64
 
 // ---------------------------------------------------------------------------
 // Encode helpers
@@ -115,21 +137,51 @@ function buildDictEncoding(fb: FBBuilder, id: number): number {
   return fb.endTable();
 }
 
-function buildField(fb: FBBuilder, name: string, dtype: DType, dictId: number | null): number {
+/** Build Arrow Date32(DAY) FlatBuffers type table. */
+function buildDate(fb: FBBuilder): number {
+  // Date.unit: FlatBuffers default = MILLISECOND (1). We want DAY (0), so we must write it.
+  fb.startTable();
+  fb.addFieldI16(0, DATE_UNIT_DAY, DATE_UNIT_MILLI_DEFAULT);
+  return fb.endTable();
+}
+
+/** Build Arrow Timestamp(MILLISECOND, tz?) FlatBuffers type table. */
+function buildTimestamp(fb: FBBuilder, tz?: string): number {
+  // Timestamp.unit: FlatBuffers default = SECOND (0). We write MILLISECOND (1).
+  // timezone (field 1): optional IANA string; omitted if tz is absent.
+  const tzOff = tz ? fb.createString(tz) : null;
+  fb.startTable();
+  fb.addFieldI16(0, TIME_UNIT_MILLI, TIME_UNIT_SECOND);
+  if (tzOff !== null) fb.addFieldOffset(1, tzOff);
+  return fb.endTable();
+}
+
+function buildField(
+  fb: FBBuilder,
+  name: string,
+  dtype: DType,
+  dictId: number | null,
+  colTz?: string,
+): number {
   const nameOff = fb.createString(name);
   let typeTag: number, typeT: number;
   let dictOff: number | null = null;
 
   switch (dtype) {
-    case 'f64': typeTag = TYPE_FLOAT; typeT = buildFloat(fb, PREC_DOUBLE); break;
-    case 'f32': typeTag = TYPE_FLOAT; typeT = buildFloat(fb, PREC_SINGLE); break;
-    case 'i32': typeTag = TYPE_INT;   typeT = buildInt(fb, 32, true);      break;
-    case 'u32': typeTag = TYPE_INT;   typeT = buildInt(fb, 32, false);     break;
-    case 'bool': typeTag = TYPE_BOOL; typeT = emptyTable(fb);               break;
+    case 'f64':  typeTag = TYPE_FLOAT; typeT = buildFloat(fb, PREC_DOUBLE); break;
+    case 'f32':  typeTag = TYPE_FLOAT; typeT = buildFloat(fb, PREC_SINGLE); break;
+    case 'i32':  typeTag = TYPE_INT;   typeT = buildInt(fb, 32, true);      break;
+    case 'u32':  typeTag = TYPE_INT;   typeT = buildInt(fb, 32, false);     break;
+    case 'i64':  typeTag = TYPE_INT;   typeT = buildInt(fb, 64, true);      break;  // ADR-009
+    case 'bool': typeTag = TYPE_BOOL;  typeT = emptyTable(fb);              break;
     case 'utf8':
       typeTag = TYPE_UTF8; typeT = emptyTable(fb);
       if (dictId !== null) dictOff = buildDictEncoding(fb, dictId);
       break;
+    case 'date32':
+      typeTag = TYPE_DATE; typeT = buildDate(fb); break;           // ADR-010: Date32(DAY)
+    case 'timestamp':
+      typeTag = TYPE_TIMESTAMP; typeT = buildTimestamp(fb, colTz); break; // ADR-010: Timestamp(MILLI, tz?)
     default:
       throw new Error(`Arrow toArrow: unsupported dtype '${String(dtype)}'`);
   }
@@ -148,10 +200,16 @@ function buildField(fb: FBBuilder, name: string, dtype: DType, dictId: number | 
 
 /**
  * Build the FlatBuffers bytes for a Schema Message (bodyLength=0).
+ * `tzs` carries the optional IANA timezone string per column (for timestamp columns).
  */
-function buildSchemaMeta(names: string[], dtypes: DType[], dictIds: (number | null)[]): Uint8Array {
+function buildSchemaMeta(
+  names: string[],
+  dtypes: DType[],
+  dictIds: (number | null)[],
+  tzs: (string | undefined)[],
+): Uint8Array {
   const fb = new FBBuilder(1024);
-  const fieldOffs = names.map((n, i) => buildField(fb, n, dtypes[i]!, dictIds[i]!));
+  const fieldOffs = names.map((n, i) => buildField(fb, n, dtypes[i]!, dictIds[i]!, tzs[i]));
   const fieldsVec = fb.createOffsetVector(fieldOffs);
   fb.startTable();
   fb.addFieldI16(0, 0); // endianness = Little
@@ -312,10 +370,15 @@ export function toArrow(df: DataFrame): Uint8Array {
     if (dtypes[i] === 'utf8') dictIds[i] = nextDictId++;
   }
 
+  // Collect tz metadata for timestamp columns (ADR-010: tz = display metadata only).
+  const tzs: (string | undefined)[] = cols.map((col) =>
+    col.dtype === 'timestamp' ? col.tz : undefined,
+  );
+
   const messages: Uint8Array[] = [];
 
   // 1. Schema
-  messages.push(ipcMessage(buildSchemaMeta(names, dtypes, dictIds), new Uint8Array(0)));
+  messages.push(ipcMessage(buildSchemaMeta(names, dtypes, dictIds, tzs), new Uint8Array(0)));
 
   // 2. DictionaryBatch per utf8 column
   for (let i = 0; i < cols.length; i++) {
@@ -437,6 +500,13 @@ interface ArrowField {
   dictId: number | null; // null if not dict-encoded
   /** For non-dict Utf8: true if the body has [validity, offsets, bytes] (3 buffers). */
   plainUtf8: boolean;
+  /** IANA tz string for Arrow Timestamp columns; undefined for all other types. */
+  tz?: string;
+  /**
+   * Arrow TimeUnit for Timestamp columns: SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3.
+   * Undefined for non-timestamp columns. Used by fromArrow to rescale to ms when needed.
+   */
+  arrowUnit?: number;
 }
 
 function parseSchema(meta: Uint8Array): ArrowField[] {
@@ -457,11 +527,22 @@ function parseSchema(meta: Uint8Array): ArrowField[] {
 
     let dtype: DType;
     let plainUtf8 = false;
+    let tz: string | undefined;
+    let arrowUnit: number | undefined;
+
     switch (typeTag) {
       case TYPE_INT: {
         const bits = typeT?.getInt32(0, 32) ?? 32;
         const signed = typeT?.getBool(1, false) ?? false;
-        dtype = (bits <= 32 && !signed) ? 'u32' : 'i32';
+        if (bits === 64) {
+          if (!signed) throw new Error(
+            `Arrow fromArrow: unsupported Arrow type UInt64. ` +
+            `wispdf supports Int64(signed) as 'i64'.`,
+          );
+          dtype = 'i64'; // ADR-009: Arrow Int64(signed) → wispdf i64
+        } else {
+          dtype = (bits <= 32 && !signed) ? 'u32' : 'i32';
+        }
         break;
       }
       case TYPE_FLOAT: {
@@ -475,13 +556,39 @@ function parseSchema(meta: Uint8Array): ArrowField[] {
         dtype = 'utf8';
         plainUtf8 = dictId === null;
         break;
+      case TYPE_DATE: {
+        // Date.unit FlatBuffers default = MILLISECOND (1). We only support Date32 = DAY (0).
+        const unit = typeT?.getInt16(0, DATE_UNIT_MILLI_DEFAULT) ?? DATE_UNIT_MILLI_DEFAULT;
+        if (unit !== DATE_UNIT_DAY) throw new Error(
+          `Arrow fromArrow: unsupported Date unit ${unit} (only Date32(DAY)=0 is supported).`,
+        );
+        dtype = 'date32'; // ADR-010: Arrow Date(DAY) → wispdf date32
+        break;
+      }
+      case TYPE_TIMESTAMP: {
+        // Timestamp.unit FlatBuffers default = SECOND (0). timezone (field 1) is optional.
+        const unit = typeT?.getInt16(0, TIME_UNIT_SECOND) ?? TIME_UNIT_SECOND;
+        const tzStr = typeT?.getString(1) ?? undefined;
+        dtype = 'timestamp'; // ADR-010: Arrow Timestamp(unit, tz?) → wispdf timestamp
+        arrowUnit = unit;
+        tz = tzStr;
+        break;
+      }
       default:
         throw new Error(
           `Arrow fromArrow: unsupported Arrow type tag ${typeTag}. ` +
-          `Supported: Int(32), UInt32, Float32, Float64, Bool, Utf8, Dict<Int32,Utf8>.`,
+          `Supported: Int32, Int64, UInt32, Float32, Float64, Bool, Utf8/Dict<Int32,Utf8>, ` +
+          `Date32(DAY), Timestamp(any unit, optional tz).`,
         );
     }
-    fields.push({ name, dtype, dictId, plainUtf8 });
+    fields.push({
+      name,
+      dtype,
+      dictId,
+      plainUtf8,
+      ...(tz !== undefined ? { tz } : {}),
+      ...(arrowUnit !== undefined ? { arrowUnit } : {}),
+    });
   }
   return fields;
 }
@@ -662,10 +769,41 @@ function parseRecordBatch(
 }
 
 /**
+ * Rescale Arrow Timestamp column values to milliseconds.
+ *
+ * Arrow Timestamp can carry any TimeUnit. wispdf stores timestamps as ms (ADR-010).
+ * - SECOND → ms: ×1000 with saturation-to-null on i64 overflow (documented).
+ *   Safe range: |seconds| ≤ 9_223_372_036_854_775 (≈ ±292 million years). Out-of-range
+ *   values (which would overflow i64 when multiplied by 1000) become null.
+ * - MICROSECOND → ms: ÷1000 (integer truncation; sub-ms precision silently dropped).
+ * - NANOSECOND → ms: ÷1_000_000 (integer truncation; sub-ms precision silently dropped).
+ * - MILLISECOND: no-op (values already in ms).
+ */
+function rescaleTimestampToMs(vals: (bigint | null)[], unit: number): (bigint | null)[] {
+  if (unit === TIME_UNIT_MILLI) return vals;
+  return vals.map((v) => {
+    if (v === null) return null;
+    switch (unit) {
+      case TIME_UNIT_SECOND:
+        // Saturation-to-null: if v is outside safe range, ×1000 would overflow i64.
+        if (v > SEC_MS_MAX || v < SEC_MS_MIN) return null;
+        return v * 1000n;
+      case TIME_UNIT_MICRO:
+        return v / 1000n; // truncate sub-ms
+      case TIME_UNIT_NANO:
+        return v / 1_000_000n; // truncate sub-ms
+      default:
+        return null; // unknown unit → null
+    }
+  });
+}
+
+/**
  * Decode an Arrow IPC stream buffer into a DataFrame.
  *
- * Supported Arrow types: Int32, UInt32, Float32, Float64, Bool,
- * Dict<Int32, Utf8> (written by our toArrow), plain Utf8 (builds a dict internally).
+ * Supported Arrow types: Int32, Int64, UInt32, Float32, Float64, Bool,
+ * Dict<Int32, Utf8> (written by our toArrow), plain Utf8 (builds a dict internally),
+ * Date32(DAY) (→ date32), Timestamp(any unit, optional tz) (→ timestamp, rescaled to ms).
  * Any other type throws a clear error naming the type tag.
  */
 export function fromArrow(buf: Uint8Array, rt: DfRuntime): DataFrame {
@@ -699,20 +837,33 @@ export function fromArrow(buf: Uint8Array, rt: DfRuntime): DataFrame {
 
   const rawCols = parseRecordBatch(rbMsg.meta, rbMsg.body, fields, dicts, rt.ctx);
 
-  // Convert raw wasm columns to JS arrays and build DataFrame
-  // (using columnToArray to avoid exposing internal Column constructors)
+  // Convert raw wasm columns to JS arrays and build DataFrame.
+  // For timestamp columns: rescale to ms if Arrow unit is not MILLISECOND.
+  // For timestamp + date32: preserve tz metadata via FrameOptions.tzs (ADR-010).
   const colData: Record<string, import('../memory/column.js').ColumnInput> = {};
   const dtypes: Record<string, DType> = {};
+  const tzMap: Record<string, string> = {};
 
   for (let i = 0; i < fields.length; i++) {
-    const name = fields[i]!.name;
-    colData[name] = columnToArray(rt.ctx, rawCols[i]!) as import('../memory/column.js').ColumnInput;
-    dtypes[name] = fields[i]!.dtype;
+    const { name, dtype, tz, arrowUnit } = fields[i]!;
+    let values = columnToArray(rt.ctx, rawCols[i]!) as import('../memory/column.js').ColumnInput;
+
+    // Rescale Arrow Timestamp to ms if the source unit differs from MILLISECOND (ADR-010).
+    if (dtype === 'timestamp' && arrowUnit !== undefined && arrowUnit !== TIME_UNIT_MILLI) {
+      values = rescaleTimestampToMs(
+        values as (bigint | null)[],
+        arrowUnit,
+      ) as import('../memory/column.js').ColumnInput;
+    }
+
+    colData[name] = values;
+    dtypes[name] = dtype;
+    if (tz) tzMap[name] = tz;
     // Free the intermediate wasm allocation
     freeRawColumn(rt.ctx, rawCols[i]!);
   }
 
-  const opts: FrameOptions = { runtime: rt, dtypes };
+  const opts: FrameOptions = { runtime: rt, dtypes, tzs: tzMap };
   return DataFrame.fromColumns(colData, opts);
 }
 

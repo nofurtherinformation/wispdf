@@ -47,6 +47,14 @@ export interface FrameOptions {
   readonly dtypes?: Readonly<Record<string, DType>>;
 
   readonly runtime?: DfRuntime;
+
+  /**
+   * IANA timezone strings for `timestamp` columns (ADR-010 §10 tz metadata).
+   * Keys are column names; values are IANA tz strings (e.g. `"America/New_York"`).
+   * Applied only to columns whose dtype is `'timestamp'`; ignored for other dtypes.
+   * Used by Arrow/CSV IO layers to propagate tz metadata from the source format.
+   */
+  readonly tzs?: Readonly<Record<string, string>>;
 }
 
 export interface SortOptions {
@@ -106,7 +114,8 @@ export class DataFrame implements FrameView, GroupBySource {
     let length = -1;
     for (const [name, input] of Object.entries(cols)) {
       const dtype = opts.dtypes?.[name] ?? inferDType(input);
-      const col = createColumn(rt.ctx, dtype, input);
+      const tz = dtype === 'timestamp' ? opts.tzs?.[name] : undefined;
+      const col = createColumn(rt.ctx, dtype, input, tz);
       if (length === -1) length = col.length;
       else if (col.length !== length) {
         throw new FrameError(`column '${name}' has length ${col.length}, expected ${length}.`);
