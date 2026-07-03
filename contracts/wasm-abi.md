@@ -337,3 +337,150 @@ match in joins — join kernels use the validity bitmaps to exclude them):
 **Definition of "done" for a kernel agent:** implement the listed exports in both builds
 following §5–§8, pass the orchestrator's conformance fixtures (including null/NaN/empty
 cases), meet the §5 per-kernel bench gate, and touch no files outside the assigned path.
+
+---
+
+# v2 additions — i64 exports + temporal reuse (orchestrator-owned)
+
+**Status:** v2, authoritative. Extends §1–§9 for ADR-009 (i64) and ADR-010 (temporals).
+All §5 calling conventions, §7 trap policy, and §8 reference-kernel patterns are
+**unchanged** and apply to every export below. Type/cast/null semantics: `dtypes.md`
+v2 §6–§11.
+
+## 10. i64 — the new kernel exports (`dt` = `i64` throughout)
+
+Only **i64** adds wasm exports; temporals add **none** (§11). Every i64 export ships in
+**both** builds with identical behavior (§1); the SIMD build uses `i64x2` only where §10.5
+allows. `vp` = validity_ptr (`0` = all-valid, §4.1). i64 data buffers are 8-byte elements
+at 16-byte-aligned base pointers.
+
+### 10.1 BigInt64 boundary crossing (state it explicitly)
+
+A wasm `i64` **parameter or return** surfaces in JS as a **`BigInt`** (the WebAssembly
+JS-API BigInt↔i64 marshalling; Node ≥ 18 and evergreen browsers). So:
+
+- **Scalar-operand kernels** (`add_i64_scalar`, `gt_i64_scalar_mask`, `fill_null_i64`)
+  take an `i64` immediate → the JS dispatch passes a **`bigint`**, not a `number`.
+- **i64 reductions that return an i64** (`sum_i64_null`, `min_i64_null`, `max_i64_null`,
+  `first_i64_null`, `last_i64_null`) return a wasm `i64` → the JS layer receives a
+  **`bigint`**. Reductions returning `f64`/`i32` (`mean/std/var_i64_null`,
+  `nunique_i64_null`) are unaffected (`number`).
+- **Bulk column data** never crosses as scalars — it stays in wasm memory behind a
+  `BigInt64Array` `viewOf` (ADR-001); only the scalars above are `bigint`-boxed.
+
+### 10.2 Agent A — elementwise (`elementwise*`)
+
+| Export | Signature |
+|---|---|
+| `add_i64` `sub_i64` `mul_i64` `div_i64` `mod_i64` | `(i32 a,i32 b,i32 out,i32 len)->()` |
+| `add_i64_scalar` `sub_i64_scalar` `mul_i64_scalar` `div_i64_scalar` `mod_i64_scalar` | `(i32 a, i64 s, i32 out, i32 len)->()` — **`s` is BigInt in JS** |
+| `neg_i64` | `(i32 a,i32 out,i32 len)->()` |
+| `gt_i64_mask` `ge_i64_mask` `lt_i64_mask` `le_i64_mask` `eq_i64_mask` `ne_i64_mask` | `(i32 a,i32 b,i32 out_mask,i32 len)->()` |
+| `gt_i64_scalar_mask` `ge_i64_scalar_mask` `lt_i64_scalar_mask` `le_i64_scalar_mask` `eq_i64_scalar_mask` `ne_i64_scalar_mask` | `(i32 a, i64 s, i32 out_mask, i32 len)->()` — **`s` is BigInt** |
+| `cast_f64_i64` `cast_f32_i64` `cast_i32_i64` `cast_u32_i64` `cast_bool_i64` | `(i32 in,i32 in_vp,i32 out,i32 out_vp,i32 len)->()` |
+| `cast_i64_f64` `cast_i64_f32` `cast_i64_i32` `cast_i64_u32` `cast_i64_bool` | `(i32 in,i32 in_vp,i32 out,i32 out_vp,i32 len)->()` |
+| `fill_null_i64` | `(i32 in,i32 vp, i64 fill, i32 out,i32 len)->()` — **`fill` is BigInt**; out all-valid |
+
+- `add/sub/mul` **wrap** mod 2^64 (`dtypes.md` §6/§8). `div_i64`/`mod_i64` **truncate**
+  toward zero; **zero divisor → clear out validity (null), no trap** (§7, `dtypes.md`
+  §3.2); the JS layer supplies an `out_vp` for these two exactly as for `div_i32`.
+- `cast_*` semantics per `dtypes.md` §7.1 (⚠ `f64/f32→i64` range/NaN → null; `i64→f64/f32`
+  round-not-null; `i64→i32/u32` wrap-truncate). `is_null`, `expand_mask_bool`,
+  `and/or_kleene`, `not_bool`, `validity_and/or` are **dtype-agnostic / bool-only** — no
+  i64 variants.
+
+### 10.3 Agent B — reductions (`reduce*`), null-aware, `skipna`
+
+| Export | Signature |
+|---|---|
+| `sum_i64_null` | `(i32 data,i32 vp,i32 len)-> i64` — **BigInt return**; wrapping |
+| `mean_i64_null` | `(i32 data,i32 vp,i32 len)-> f64` |
+| `min_i64_null` `max_i64_null` | `(i32 data,i32 vp,i32 len)-> i64` — **BigInt return** |
+| `std_i64_null` `var_i64_null` | `(i32 data,i32 vp,i32 len)-> f64` (ddof=1) |
+| `nunique_i64_null` | `(i32 data,i32 vp,i32 len)-> i32` |
+| `first_i64_null` `last_i64_null` | `(i32 data,i32 vp,i32 len,i32 out_valid)-> i64` — **BigInt return**; `out_valid=0` if all null |
+
+`count_null` is validity-only (§9 Agent B) and is **reused** — no `count_i64`.
+
+### 10.4 Agent C — selection (`select*`) & Agent D — hash (`hash*`)
+
+| Export | Signature |
+|---|---|
+| `filter_i64` | `(i32 data,i32 mask,i32 out,i32 len)->i32` (compacts where mask bit=1; returns count) |
+| `gather_i64` | `(i32 data,i32 idx,i32 idx_len,i32 out)->()` |
+| `argsort_i64` | `(i32 data,i32 vp,i32 inout_perm,i32 len,i32 desc,i32 scratch_ptr)->()` (v1.2 `scratch_ptr` = caller `i32[len]`; stable; order per `dtypes.md` §4.6 — nulls last, no NaN) |
+| `topk_i64` | `(i32 data,i32 vp,i32 k,i32 out_idx,i32 len,i32 largest)->i32` |
+| `hash_i64` | `(i32 data,i32 vp,i32 out_hash,i32 len)->()` (64-bit hashes → `i64[len]`; **splitmix64 direct** on the value; null rows → `H_NULL`) |
+
+`gather_validity`, `filter_indices` (JS dispatch, v1.2), `hash_combine`, `group_build`,
+`join_hash_inner`, `join_hash_left` are **dtype-agnostic** (they operate on validity
+bitmaps, masks, indices, or 64-bit hash values) and are **reused unchanged** — no i64
+variants. `nunique_i64_null` may keep the documented O(n²)-beyond-scratch ceiling
+(`status.md` parking lot).
+
+### 10.5 SIMD policy for i64 (both builds, identical results)
+
+- `add_i64` `sub_i64` `neg_i64` and all six `*_i64_mask` comparisons use **`i64x2`**
+  (2 lanes/iter, scalar tail) in the SIMD build (`i64x2.add/sub/neg`, `i64x2.eq/ne/
+  lt_s/gt_s/le_s/ge_s`). i64 is signed; use the `_s` compares.
+- `mul_i64` `div_i64` `mod_i64` are **scalar-only in BOTH builds**: SIMD128 has no vector
+  integer division/remainder, and `i64x2.mul` is emulated (no throughput win) — per the
+  `hash.rs` precedent (ADR-009 §Decision/SIMD).
+
+### 10.6 Scratch & accumulation rules for i64 reductions (both builds MUST agree)
+
+- **`sum_i64_null` is order-insensitive.** Wrapping i64 add (mod 2^64) is associative and
+  commutative, so the SIMD `i64x2` pairwise sum (combine the two lanes with a final
+  wrapping add) and the scalar single-accumulator sum produce **bit-identical** results.
+  No striped-accumulator determinism dance is needed (unlike f64/f32 in §9). Null lanes
+  contribute `0`.
+- **`mean_i64` / `std_i64` / `var_i64`** convert each i64 → f64 first (rounding beyond
+  ±2^53, `dtypes.md` §6) and then run the **same f64 accumulation strategy as §9's float
+  reductions** (2 striped f64 accumulators for the sum; two-pass, ddof=1, for std/var) so
+  scalar and SIMD agree bitwise. Any bounded scratch is stack-local (§5.4); no `alloc`.
+- **`min/max/first/last/count/nunique_i64`** are order-insensitive by nature.
+
+### 10.7 Kernel-level results for empty / all-null i64 inputs (the §9 table, i64 row)
+
+The API layer maps these to `null` via `count_null` (`dtypes.md` §11); kernels return
+deterministically:
+
+| kernel | empty / all-null result |
+|---|---|
+| `sum_i64_null` | **`0` (`0n`)** — additive identity |
+| `mean_i64_null` `std_i64_null` `var_i64_null` | **`NaN`** (f64) |
+| `min_i64_null` `max_i64_null` | **`0` (`0n`)** — callers **must** consult `count_null` (matches the `min/max_i32/u32` integer rule; there is no NaN sentinel for integers) |
+| `first_i64_null` `last_i64_null` | value `0n`, **`out_valid = 0`** |
+| `nunique_i64_null` | **`0`** |
+| `count_null` | `0` (non-null count) |
+
+`std/var_i64` with fewer than 2 non-null values → `NaN`, as in §9.
+
+## 11. Temporals reuse existing exports — NO temporal-specific wasm exports
+
+**There are ZERO temporal wasm exports.** `date32` and `timestamp` are logical dtypes
+that dispatch to a **physical kernel token** (ADR-010 registry; `DTypeInfo.wasm`):
+
+| logical dtype | kernel token | value-ops reused |
+|---|---|---|
+| `date32` | **`i32`** | `eq/ne/gt/ge/lt/le_i32_mask` (+ `_scalar_mask`), `argsort_i32`, `topk_i32`, `filter_i32`, `gather_i32`, `min/max/first/last_i32_null`, `sum/mean/std/var/nunique_i32_null` (where meaningful), `hash_i32`, `group_build`, `join_hash_*`, `cast_i32_*`, `add_i32`/`sub_i32` (restricted, §below) |
+| `timestamp` | **`i64`** | the §10 `*_i64` equivalents of the above |
+
+- **Compare / sort / group / join / min / max / first / last / filter / gather** on a
+  temporal column call the token's kernel **unchanged**; the frame/expr layer relabels
+  the result dtype back to the logical type.
+- **Arithmetic is enforced in the JS expr/frame layer**, not in wasm: the restricted
+  temporal algebra (`dtypes.md` §9) lowers to the token's `add/sub` kernels
+  (`timestamp ± ms` → `add_i64`/`sub_i64`; `date32 ± days` → `add_i32`/`sub_i32`;
+  `timestamp − timestamp` → `sub_i64`; `date32 − date32` → `sub_i32`), then relabels the
+  result. Disallowed temporal ops never reach a kernel — the compiler raises the dtype
+  error.
+- **Scale-casts** (`dtypes.md` §7.2): `date32 → timestamp` lowers to `cast_i32_i64` +
+  `mul_i64_scalar(86_400_000)` (existing kernels); `timestamp → date32` is a **JS-side**
+  BigInt floor-div (no floor-div kernel exists; `div_i64` truncates). Reinterpret casts
+  (`date32↔i32`, `timestamp↔i64`) emit **no** kernel (a pure relabel).
+- **`dt` accessors are JS-side** (civil-from-days integer math; tz-aware via cached
+  `Intl.DateTimeFormat`) — **no kernel** (ADR-010).
+
+Consequence: **no wasm binary grows for temporals**; the §1 75 KB-gzipped size budget is
+affected only by the i64 kernels of §10.
