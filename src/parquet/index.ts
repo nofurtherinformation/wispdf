@@ -29,6 +29,10 @@
 // Use sub-path exports so TypeScript NodeNext resolves the "types" field via
 // the "./src/*.js" entry in each package's exports map — the root "." entry uses
 // a "browser"/"default" split that tsc doesn't match when building DTS.
+// NOTE: internal 'src/index.js' subpath instead of the public 'hyparquet' entry —
+// the root entry's browser/default exports split defeats NodeNext DTS resolution
+// (see bead dataframe-dh9.7). hyparquet is EXACT-pinned in package.json for this
+// reason; when bumping the pin, retry the public specifier first.
 import { parquetMetadataAsync, parquetRead, parquetSchema } from 'hyparquet/src/index.js';
 import { parquetWriteBuffer } from 'hyparquet-writer/src/index.js';
 

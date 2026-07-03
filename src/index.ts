@@ -19,7 +19,7 @@ export type { ThreadsConfig, ThreadsHandle } from './workers/index.js';
 // Phase 6 — I/O: CSV reader, JSON wrappers, Arrow IPC (P6.E).
 export * from './io/index.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 /** Returns a greeting string. Placeholder retained for the scaffold smoke test. */
 export function hello(name = 'world'): string {

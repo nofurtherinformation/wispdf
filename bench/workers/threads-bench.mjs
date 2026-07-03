@@ -27,7 +27,9 @@ const N = 10_000_000;
 /* Load enableThreads from built dist                                    */
 /* ------------------------------------------------------------------ */
 
-const { enableThreads } = await import('../../dist/index.js');
+// enableThreads moved to the workers subpath entry when it left the main bundle
+// (size-gate split; see tsup.config.ts comment).
+const { enableThreads } = await import('../../dist/workers.js');
 
 /* ------------------------------------------------------------------ */
 /* Create two pool sizes — 1 worker and 4 workers                       */
