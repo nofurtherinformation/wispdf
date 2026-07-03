@@ -13,8 +13,8 @@
 
 import type { ViewDType } from './views.js';
 
-/** The v1 column dtypes (`contracts/dtypes.md` §1). `utf8` is dict-encoded (ABI §4.4). */
-export type DType = 'f64' | 'f32' | 'i32' | 'u32' | 'bool' | 'utf8';
+/** The v2 column dtypes (`contracts/dtypes.md` §1). `utf8` is dict-encoded; `i64` uses BigInt64Array. */
+export type DType = 'f64' | 'f32' | 'i32' | 'u32' | 'bool' | 'utf8' | 'i64';
 
 /** `TypedArray` constructors a column data / auxiliary buffer can map to. */
 export type TypedArrayCtor =
@@ -22,7 +22,8 @@ export type TypedArrayCtor =
   | Float32ArrayConstructor
   | Int32ArrayConstructor
   | Uint32ArrayConstructor
-  | Uint8ArrayConstructor;
+  | Uint8ArrayConstructor
+  | BigInt64ArrayConstructor;
 
 /** Static description of one v1 dtype (see module doc). */
 export interface DTypeInfo {
@@ -50,6 +51,8 @@ export const DTYPES: Record<DType, DTypeInfo> = {
   bool: { name: 'bool', size: 1, view: 'bool', ctor: Uint8Array, wasm: 'bool', float: false },
   // `utf8` data buffer is `i32[len]` dictionary indices (ABI §4.4); dict is separate.
   utf8: { name: 'utf8', size: 4, view: 'i32', ctor: Int32Array, wasm: 'utf8', float: false },
+  // `i64` is 8-byte signed 64-bit; maps to BigInt64Array; bigint at JS boundary (ADR-009).
+  i64: { name: 'i64', size: 8, view: 'i64', ctor: BigInt64Array, wasm: 'i64', float: false },
 };
 
 /** Descriptor for `dtype`. Throws on an unknown dtype (helpful for API callers). */

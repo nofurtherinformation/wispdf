@@ -59,7 +59,7 @@ export interface WithColumnOptions {
   readonly dtype?: DType;
 }
 
-const NUMERIC = new Set<DType>(['f64', 'f32', 'i32', 'u32']);
+const NUMERIC = new Set<DType>(['f64', 'f32', 'i32', 'u32', 'i64']);
 
 export class DataFrame implements FrameView, GroupBySource {
 
@@ -428,7 +428,8 @@ function describeColumn(cells: Cell[]): (number | null)[] {
   const finite: number[] = [];
   for (const v of cells) {
     if (v === null) continue;
-    const n = v as number;
+    // i64 columns: convert bigint to number (may lose precision for |x| > 2^53)
+    const n = typeof v === 'bigint' ? Number(v) : (v as number);
     if (Number.isFinite(n)) finite.push(n);
   }
   const count = finite.length;

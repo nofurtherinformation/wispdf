@@ -239,13 +239,23 @@ function gatherFirst(rt: DfRuntime, col: Column, firstRow: Int32Array): Column {
     return createColumn(ctx, 'utf8', out);
   }
 
+  if (col.dtype === 'i64') {
+    const data = ctx.viewOf({ ptr: col.dataPtr, length: col.length, dtype: 'i64' }) as BigInt64Array;
+    const out = new Array<bigint | null>(n);
+    for (let g = 0; g < n; g++) {
+      const r = firstRow[g]!;
+      out[g] = validity && !getBit(validity, bitOff + r) ? null : data[r]!;
+    }
+    return createColumn(ctx, 'i64', out as unknown as ColumnInput);
+  }
+
   const isBool = col.dtype === 'bool';
   const data = ctx.viewOf({ ptr: col.dataPtr, length: col.length, dtype: DTYPES[col.dtype].view });
   const out = new Array<number | boolean | null>(n);
   for (let g = 0; g < n; g++) {
     const r = firstRow[g]!;
     if (validity && !getBit(validity, bitOff + r)) out[g] = null;
-    else out[g] = isBool ? data[r] !== 0 : data[r]!;
+    else out[g] = isBool ? data[r] !== 0 : (data[r] as number);
   }
   return createColumn(ctx, col.dtype, out as unknown as ColumnInput);
 }
@@ -292,6 +302,40 @@ function scatterReduce(
   }
   if (op === 'std' || op === 'var') {
     return reduceStdVar(rt, plan, gids, groupCount, len, valid);
+  }
+
+  // i64 operations require bigint arithmetic
+  if (col.dtype === 'i64') {
+    const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: 'i64' }) as BigInt64Array;
+    if (op === 'sum') {
+      const acc = new Array<bigint>(groupCount).fill(0n);
+      for (let i = 0; i < len; i++) if (valid(i)) { const g = gids[i]!; acc[g] = acc[g]! + data[i]!; }
+      return createColumn(ctx, 'i64', acc as unknown as ColumnInput);
+    }
+    if (op === 'mean') {
+      const acc = new Float64Array(groupCount);
+      const cnt = new Int32Array(groupCount);
+      for (let i = 0; i < len; i++) {
+        if (!valid(i)) continue;
+        const g = gids[i]!;
+        acc[g] = acc[g]! + Number(data[i]!);
+        cnt[g] = cnt[g]! + 1;
+      }
+      const out = new Array<number | null>(groupCount);
+      for (let g = 0; g < groupCount; g++) out[g] = cnt[g]! > 0 ? acc[g]! / cnt[g]! : null;
+      return createColumn(ctx, 'f64', out as unknown as ColumnInput);
+    }
+    // min/max for i64
+    const extI64 = new Array<bigint | null>(groupCount).fill(null);
+    const isMin = op === 'min';
+    for (let i = 0; i < len; i++) {
+      if (!valid(i)) continue;
+      const g = gids[i]!;
+      const x = data[i]!;
+      if (extI64[g] === null) extI64[g] = x;
+      else extI64[g] = isMin ? (x < extI64[g]! ? x : extI64[g]!) : (x > extI64[g]! ? x : extI64[g]!);
+    }
+    return createColumn(ctx, 'i64', extI64 as unknown as ColumnInput);
   }
 
   const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view }) as
@@ -347,14 +391,17 @@ function reduceStdVar(
 ): Column {
   const { ctx } = rt;
   const col = plan.operand!;
-  const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view }) as
-    | Float64Array | Float32Array | Int32Array | Uint32Array;
+  const isI64 = col.dtype === 'i64';
+  const data = isI64
+    ? ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: 'i64' }) as BigInt64Array
+    : ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view }) as
+        Float64Array | Float32Array | Int32Array | Uint32Array;
   const sum = new Float64Array(groupCount);
   const cnt = new Int32Array(groupCount);
   for (let i = 0; i < len; i++) {
     if (!valid(i)) continue;
     const g = gids[i]!;
-    sum[g] = sum[g]! + data[i]!;
+    sum[g] = sum[g]! + (isI64 ? Number((data as BigInt64Array)[i]!) : (data as Float64Array)[i]!);
     cnt[g] = cnt[g]! + 1;
   }
   const mean = new Float64Array(groupCount);
@@ -363,7 +410,8 @@ function reduceStdVar(
   for (let i = 0; i < len; i++) {
     if (!valid(i)) continue;
     const g = gids[i]!;
-    const d = data[i]! - mean[g]!;
+    const x = isI64 ? Number((data as BigInt64Array)[i]!) : (data as Float64Array)[i]!;
+    const d = x - mean[g]!;
     sse[g] = sse[g]! + d * d;
   }
   const out = new Array<number | null>(groupCount);
@@ -388,15 +436,18 @@ function reduceNunique(
 ): Column {
   const { ctx } = rt;
   const col = plan.operand!;
-  const sets: Array<Set<number> | undefined> = new Array(groupCount);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sets: Array<Set<any> | undefined> = new Array(groupCount);
   const data =
     col.dtype === 'utf8' || col.dtype === 'bool'
       ? (ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: col.dtype === 'utf8' ? 'i32' : 'bool' }))
-      : (ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view }));
+      : col.dtype === 'i64'
+        ? (ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: 'i64' }) as BigInt64Array)
+        : (ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view }));
   for (let i = 0; i < len; i++) {
     if (!valid(i)) continue;
     const g = gids[i]!;
-    (sets[g] ??= new Set<number>()).add(data[i]!);
+    (sets[g] ??= new Set()).add(data[i]!);
   }
   const out = new Array<number>(groupCount);
   for (let g = 0; g < groupCount; g++) out[g] = sets[g] ? sets[g]!.size : 0;
@@ -433,11 +484,20 @@ function reduceFirstLast(
     }
     return createColumn(ctx, 'utf8', out as unknown as ColumnInput);
   }
+  if (col.dtype === 'i64') {
+    const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: 'i64' }) as BigInt64Array;
+    for (let g = 0; g < groupCount; g++) {
+      const r = chosen[g]!;
+      out[g] = r === -1 ? null : data[r]!;
+    }
+    return createColumn(ctx, 'i64', out as unknown as ColumnInput);
+  }
+
   const isBool = col.dtype === 'bool';
   const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view });
   for (let g = 0; g < groupCount; g++) {
     const r = chosen[g]!;
-    out[g] = r === -1 ? null : isBool ? data[r] !== 0 : data[r]!;
+    out[g] = r === -1 ? null : isBool ? data[r] !== 0 : (data[r] as number);
   }
   return createColumn(ctx, col.dtype, out as unknown as ColumnInput);
 }

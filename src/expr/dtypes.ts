@@ -87,8 +87,8 @@ export type TExpr =
     }>;
 
 /** `true` for a value dtype that participates in arithmetic (dtypes.md §3.2). */
-const NUMERIC: ReadonlySet<DType> = new Set<DType>(['f64', 'f32', 'i32', 'u32']);
-const INTEGER: ReadonlySet<DType> = new Set<DType>(['i32', 'u32']);
+const NUMERIC: ReadonlySet<DType> = new Set<DType>(['f64', 'f32', 'i32', 'u32', 'i64']);
+const INTEGER: ReadonlySet<DType> = new Set<DType>(['i32', 'u32', 'i64']);
 const FLOAT: ReadonlySet<DType> = new Set<DType>(['f64', 'f32']);
 
 function isNumeric(d: DType): boolean {
@@ -139,8 +139,9 @@ function resolveNode(e: Expr, schema: Schema): TExpr {
       return { kind: 'col', name: node.name, dtype: dt };
     }
     case 'lit': {
-      // A bare numeric literal with no sibling context defaults: int→i32, frac→f64.
+      // A bare literal with no sibling context defaults: bigint→i64, int→i32, frac→f64.
       if (node.dtype !== null) return litTExpr(node.value, node.dtype);
+      if (typeof node.value === 'bigint') return litTExpr(node.value, 'i64');
       if (typeof node.value === 'number') {
         return litTExpr(node.value, Number.isInteger(node.value) ? 'i32' : 'f64');
       }
@@ -216,21 +217,29 @@ function arithLitVsTyped(
     throw unsupportedDtype(op, d, 'arithmetic requires a numeric dtype; cast first.');
   }
   if (FLOAT.has(d)) return { opDtype: d, colTarget: d }; // literal adopts the float dtype
-  // integer column: adopt if the literal is an in-range integer, else widen to f64.
+  if (d === 'i64') {
+    // number literal vs i64 column: adopt as i64 if safe-int, else widen both to f64.
+    if (Number.isSafeInteger(value)) return { opDtype: 'i64', colTarget: 'i64' };
+    return { opDtype: 'f64', colTarget: 'f64' };
+  }
+  // i32/u32 column: adopt if the literal is an in-range integer, else widen to f64.
   if (intInRange(value, d as 'i32' | 'u32')) return { opDtype: d, colTarget: d };
   return { opDtype: 'f64', colTarget: 'f64' }; // fractional / out-of-range → int→float
 }
 
-/** Common arithmetic dtype for two typed operands (dtypes.md §3.1). */
+/** Common arithmetic dtype for two typed operands (dtypes.md §3.1 + v2 §8). */
 function arithCommon(op: ArithOp, a: DType, b: DType): DType {
   if (!isNumeric(a)) throw unsupportedDtype(op, a, 'arithmetic requires a numeric dtype; cast first.');
   if (!isNumeric(b)) throw unsupportedDtype(op, b, 'arithmetic requires a numeric dtype; cast first.');
   if (a === b) return a;
-  // the single implicit rule: int → float widening
-  if (INTEGER.has(a) && b === 'f64') return 'f64';
-  if (INTEGER.has(b) && a === 'f64') return 'f64';
-  if (INTEGER.has(a) && b === 'f32') return 'f32';
-  if (INTEGER.has(b) && a === 'f32') return 'f32';
+  // v2 i64 lattice: i32/u32 ⊕ i64 → i64; i64 ⊕ f64 → f64; i64 ⊕ f32 → f64
+  if ((a === 'i64' && (b === 'i32' || b === 'u32')) || (b === 'i64' && (a === 'i32' || a === 'u32'))) return 'i64';
+  if ((a === 'i64' && FLOAT.has(b)) || (b === 'i64' && FLOAT.has(a))) return 'f64';
+  // int → float widening (v1 rule, non-i64)
+  if ((a === 'i32' || a === 'u32') && b === 'f64') return 'f64';
+  if ((b === 'i32' || b === 'u32') && a === 'f64') return 'f64';
+  if ((a === 'i32' || a === 'u32') && b === 'f32') return 'f32';
+  if ((b === 'i32' || b === 'u32') && a === 'f32') return 'f32';
   throw dtypeMismatch(op, a, b, 'insert an explicit .cast() (only int→float widening is implicit).');
 }
 
@@ -317,7 +326,8 @@ function cmp(op: CompareOp, operandDtype: DType, left: TExpr, right: TExpr): TEx
 /** Operand dtype for a numeric literal vs a typed numeric column in a comparison. */
 function cmpLitVsTyped(value: number, d: DType): DType {
   if (FLOAT.has(d)) return d;
-  // integer column: exact match if in-range integer, else literal-driven widen to f64.
+  if (d === 'i64') return Number.isSafeInteger(value) ? 'i64' : 'f64';
+  // i32/u32 column: exact match if in-range integer, else literal-driven widen to f64.
   return intInRange(value, d as 'i32' | 'u32') ? d : 'f64';
 }
 
@@ -363,18 +373,25 @@ function validateFill(value: ScalarValue, d: DType): void {
     if (typeof value !== 'boolean') throw badLiteral(value, d, 'fillNull');
     return;
   }
+  if (d === 'i64') {
+    if (typeof value !== 'bigint' && typeof value !== 'number') throw badLiteral(value, d, 'fillNull');
+    if (typeof value === 'number' && !Number.isSafeInteger(value)) throw badLiteral(value, d, 'fillNull');
+    return;
+  }
   if (typeof value !== 'number') throw badLiteral(value, d, 'fillNull');
-  if (INTEGER.has(d) && !intInRange(value, d as 'i32' | 'u32')) throw badLiteral(value, d, 'fillNull');
+  if ((d === 'i32' || d === 'u32') && !intInRange(value, d)) throw badLiteral(value, d, 'fillNull');
 }
 
-/** The v1 cast matrix (dtypes.md §2). `true` = allowed; missing = ✗. */
+/** The v2 cast matrix (dtypes.md §2 + §8). `true` = allowed; missing = ✗. */
 const CAST_OK: Readonly<Record<DType, ReadonlySet<DType>>> = {
-  f64: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  f32: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  i32: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  u32: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
-  bool: new Set(['f64', 'f32', 'i32', 'u32', 'bool']),
+  f64: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  f32: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  i32: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  u32: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
+  bool: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
   utf8: new Set(['utf8']),
+  // i64 ↔ utf8 is ✗ (per dtypes.md §8); all others allowed
+  i64: new Set(['f64', 'f32', 'i32', 'u32', 'bool', 'i64']),
 };
 
 function resolveCast(operandE: Expr, to: DType, schema: Schema): TExpr {
@@ -402,7 +419,8 @@ export function aggResult(op: AggOp, d: DType): DType {
       throw unsupportedDtype('nunique', d, 'nunique supports numeric and utf8 columns.');
     case 'sum':
       if (FLOAT.has(d)) return d; // f64→f64, f32→f32
-      if (INTEGER.has(d)) return 'f64'; // int sums widen to f64 (ABI §9)
+      if (d === 'i64') return 'i64'; // i64 sum → i64 (bigint wrapping, ADR-009)
+      if (d === 'i32' || d === 'u32') return 'f64'; // int sums widen to f64 (ABI §9)
       throw unsupportedDtype('sum', d, 'sum requires a numeric dtype.');
     case 'mean':
     case 'std':

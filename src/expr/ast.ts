@@ -37,7 +37,7 @@ export type AggOp =
   | 'last';
 
 /** A raw JS scalar that a literal / fill value can hold. */
-export type ScalarValue = number | string | boolean;
+export type ScalarValue = number | bigint | string | boolean;
 
 /** The immutable AST node inside every {@link Expr}. Discriminated on `kind`. */
 export type ExprNode =
@@ -222,7 +222,9 @@ const ARITH_SYM: Record<ArithOp, string> = {
 };
 
 function renderScalar(v: ScalarValue): string {
-  return typeof v === 'string' ? JSON.stringify(v) : String(v);
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (typeof v === 'bigint') return String(v); // no 'n' suffix per spec
+  return String(v);
 }
 
 function render(node: ExprNode): string {

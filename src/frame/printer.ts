@@ -12,13 +12,14 @@ export function formatCell(cell: Cell, dtype: DType): string {
   if (cell === null) return 'null';
   if (typeof cell === 'boolean') return cell ? 'true' : 'false';
   if (typeof cell === 'string') return cell.length > 24 ? `${cell.slice(0, 23)}${ELLIPSIS}` : cell;
+  if (typeof cell === 'bigint') return String(cell); // no 'n' suffix per spec
 
   if (Number.isNaN(cell)) return 'NaN';
   if (cell === Infinity) return 'inf';
   if (cell === -Infinity) return '-inf';
   if (Number.isInteger(cell)) return String(cell);
   if (dtype === 'f32' || dtype === 'f64') {
-    const p = cell.toPrecision(6);
+    const p = (cell as number).toPrecision(6);
     return p.includes('.') && !p.includes('e') ? p.replace(/0+$/, '').replace(/\.$/, '') : p;
   }
   return String(cell);

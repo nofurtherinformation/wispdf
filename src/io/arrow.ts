@@ -643,8 +643,10 @@ function parseRecordBatch(
       const datOff = getBufOff(bi); bi++;
       const dataPtr = ctx.mod.alloc(Math.max(rowLen * info.size, 1));
       const view = ctx.viewOf({ ptr: dataPtr, length: rowLen, dtype: info.view });
-      const srcTyped = new info.ctor(body.buffer as ArrayBuffer, body.byteOffset + datOff, rowLen);
-      (view as unknown as { set(src: ArrayLike<number>): void }).set(srcTyped);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const srcTyped = new (info.ctor as any)(body.buffer as ArrayBuffer, body.byteOffset + datOff, rowLen);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (view as any).set(srcTyped);
 
       let validityPtr = 0;
       if (hasValidity) {

@@ -55,13 +55,22 @@ export function makeRowCursor(
           return data[cur] !== 0;
         },
       });
+    } else if (col.dtype === 'i64') {
+      const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: 'i64' }) as BigInt64Array;
+      Object.defineProperty(proxy, name, {
+        enumerable: true,
+        get(): Cell {
+          if (validity && !getBit(validity, bitOff + cur)) return null;
+          return data[cur]!; // bigint
+        },
+      });
     } else {
       const data = ctx.viewOf({ ptr: col.dataPtr, length: len, dtype: DTYPES[col.dtype].view });
       Object.defineProperty(proxy, name, {
         enumerable: true,
         get(): Cell {
           if (validity && !getBit(validity, bitOff + cur)) return null;
-          return data[cur]!;
+          return data[cur] as number;
         },
       });
     }

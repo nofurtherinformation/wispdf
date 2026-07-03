@@ -56,11 +56,12 @@ export interface Column {
 /** JS value shapes accepted by {@link createColumn}, per dtype. */
 export type ColumnInput =
   | ArrayLike<number | null | undefined>
+  | ArrayLike<bigint | number | null | undefined>
   | ArrayLike<boolean | null | undefined>
   | ArrayLike<string | null | undefined>;
 
 /** One decoded column cell: a value, or `null` for a null slot. */
-export type Cell = number | boolean | string | null;
+export type Cell = number | bigint | boolean | string | null;
 
 /** Structural handle for the single bulk-write method shared by all TypedArrays. */
 interface Settable {
@@ -94,6 +95,9 @@ export function createColumn(ctx: MemoryContext, dtype: DType, values: ColumnInp
   }
   if (dtype === 'bool') {
     return createBoolColumn(ctx, values as ArrayLike<boolean | null | undefined>);
+  }
+  if (dtype === 'i64') {
+    return createI64Column(ctx, values as ArrayLike<bigint | number | null | undefined>);
   }
   return createNumericColumn(ctx, dtype, values as ArrayLike<number | null | undefined>);
 }
@@ -191,6 +195,57 @@ function createBoolColumn(
   return root('bool', len, dataPtr, validityPtr, null);
 }
 
+function createI64Column(
+  ctx: MemoryContext,
+  values: ArrayLike<bigint | number | null | undefined>,
+): Column {
+  const len = values.length;
+
+  if (values instanceof BigInt64Array) {
+    // Fast path: bulk-copy from a BigInt64Array, no nulls.
+    const dataPtr = ctx.mod.alloc(len * 8);
+    const view = ctx.viewOf({ ptr: dataPtr, length: len, dtype: 'i64' }) as BigInt64Array;
+    view.set(values);
+    return root('i64', len, dataPtr, 0, null);
+  }
+
+  // Slow path: scan for nulls and validate number values (ADR-009: safe-int only).
+  let nulls = 0;
+  for (let i = 0; i < len; i++) {
+    const v = values[i];
+    if (isNullish(v)) { nulls++; continue; }
+    if (typeof v === 'number') {
+      if (!Number.isInteger(v)) {
+        throw new RangeError(`i64 column: non-integer number ${v} at index ${i} — use BigInt or null`);
+      }
+      if (!Number.isSafeInteger(v)) {
+        throw new RangeError(`i64 column: unsafe integer ${v} at index ${i} — use BigInt (e.g. ${v}n)`);
+      }
+    }
+    // typeof bigint: always safe
+  }
+
+  const dataPtr = ctx.mod.alloc(len * 8);
+  const validityPtr = nulls > 0 ? ctx.mod.alloc(validityBytes(len)) : 0;
+
+  const view = ctx.viewOf({ ptr: dataPtr, length: len, dtype: 'i64' }) as BigInt64Array;
+  let vbits: Uint8Array | null = null;
+  if (validityPtr !== 0) {
+    vbits = ctx.viewOf({ ptr: validityPtr, length: validityBytes(len), dtype: 'u8' }) as Uint8Array;
+    vbits.fill(0);
+  }
+  for (let i = 0; i < len; i++) {
+    const v = values[i];
+    if (isNullish(v)) {
+      view[i] = 0n;
+    } else {
+      view[i] = typeof v === 'bigint' ? v : BigInt(v as number);
+      if (vbits) setBit(vbits, i);
+    }
+  }
+  return root('i64', len, dataPtr, validityPtr, null);
+}
+
 function createStringColumn(
   ctx: MemoryContext,
   values: ArrayLike<string | null | undefined>,
@@ -266,6 +321,14 @@ export function columnToArray(ctx: MemoryContext, col: Column): Cell[] {
     return out;
   }
 
+  if (col.dtype === 'i64') {
+    const data = ctx.viewOf({ ptr: col.dataPtr, length, dtype: 'i64' }) as BigInt64Array;
+    for (let i = 0; i < length; i++) {
+      out[i] = validity && !getBit(validity, validityBitOffset + i) ? null : data[i]!;
+    }
+    return out;
+  }
+
   const info = DTYPES[col.dtype];
   const data = ctx.viewOf({ ptr: col.dataPtr, length, dtype: info.view });
   const isBool = col.dtype === 'bool';
@@ -273,7 +336,7 @@ export function columnToArray(ctx: MemoryContext, col: Column): Cell[] {
     if (validity && !getBit(validity, validityBitOffset + i)) {
       out[i] = null;
     } else {
-      out[i] = isBool ? data[i] !== 0 : data[i]!;
+      out[i] = isBool ? data[i] !== 0 : (data[i] as number);
     }
   }
   return out;
