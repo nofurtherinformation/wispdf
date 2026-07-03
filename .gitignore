@@ -4,6 +4,14 @@ dist/
 target/
 coverage/
 
+# Generated API docs (typedoc output)
+docs/api/
+
+# Example app build outputs and dependencies
+examples/*/dist/
+examples/*/node_modules/
+examples/*/public/*.wasm
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

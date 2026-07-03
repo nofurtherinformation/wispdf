@@ -21,6 +21,8 @@ Last updated: 2026-07-02
 | dataframe-8aj.1 | P4.1 Hardening & performance sweep | Sonnet | in-progress | `npm run gate` green (build+test:scalar+test:simd+size); **771 tests** both builds; index.js 17.13 KB gz, index.cjs 17.44 KB gz | minify ON; WASM_BUILD env-var scalar/simd test split; fuzz suite (3 new tests); regression harness (wasm-v1.json + check-regression.mjs); bench cleanup. `gate:bench` NOT included in `gate` script. |
 | dataframe-8aj.2 | P4.2 Independent adversarial verification | Sonnet | done | Full gate + bench matrix re-run green; regression harness injection PASS; 2 findings | See bead notes. **Findings:** (1) `withColumn_add_100k` baseline (0.0953 ms) flaky: 2/3 fresh Docker runs fail at 1.11× (threshold 1.10); sub-ms op is noise-sensitive. (2) `--update` has no dirty-tree guard (noted, not fixed). E2E reproduced: pipeline 3.72-3.79×, join 1.74-1.79×, sortValues 1.68-1.70×. 0 skipped tests; test diff additive only. |
 
+| dataframe-5am.2 | P6.F Release prep: README, typedoc, examples, packaging checks, publish dry-run | Sonnet | done | gate 877/877; publint clean; attw all-green (node10/node16/bundler); publish dry-run clean; node-quickstart PASS; vite build PASS; typedoc 1.7 MB; pack 385.7 KB / 19 files | CSV whitespace-as-f64 bug fixed; worker-script publint false-positive fixed via `require` alias; `typesVersions` added for node10 subpath; `sideEffects:false`; `private` removed; exports map split per import/require condition. |
+
 ## Gate Definitions
 
 | Gate | Condition | Blocks |
@@ -44,3 +46,22 @@ Last updated: 2026-07-02
 | ADR-006 | Parallelism is an opt-in shared-memory mode | accepted |
 | ADR-007 | Implementation language: **Rust** (decided by Phase 0 spike) | accepted |
 | ADR-008 | Stable kernel ABI | accepted |
+
+## v2 Parking Lot
+
+Features deferred from v1 scope (spec §10.4 + accumulated phase deferrals):
+
+| Feature | Notes / Blocker |
+|---|---|
+| i64 / BigInt columns | Requires wasm32 ABI extension; JS BigInt boundary overhead TBD |
+| Dates / timestamps / timezones | i64 encoding prerequisite; timezone DB size budget concern |
+| Chunked / out-of-core columns | Requires Arrow Chunked Array layout change; lazy optimizer prerequisite |
+| Parquet I/O | Large binary format dependency; Arrow IPC covers the main use-case for v1 |
+| Lazy query optimizer | Requires logical plan representation; needed for predicate push-down and projection pruning |
+| wasm64 (> 4 GB memory) | Requires wasm64 target support in Rust + browser runtime support |
+| `utf8` col-vs-col compare | Kernel ABI requires unify_dict before comparison; wasm ABI §5 defers this to v2 |
+| `nunique` O(n²) ceiling | Current hash-table implementation; acceptable at ≤ 1M unique values |
+| ReadableStream CSV | `ChunkParser` is streaming-friendly internally; `fromCSVStream(stream)` is a thin wrapper — deferred as usage pattern unclear |
+| `wasm_unify_dict` kernel | The dict unification kernel is exposed at the ABI level (§5) but not wired to a JS API yet |
+| pandas.Index / alignment | Explicit non-goal; row position is identity |
+| Mutation-in-place API | Explicit non-goal; all ops return new frames |

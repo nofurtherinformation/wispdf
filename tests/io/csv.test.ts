@@ -308,7 +308,12 @@ describe('fromCSV — round-trip properties', () => {
         ),
         (vals) => {
           const csv = toCsvText(['s'], vals.map((x) => [x]));
-          const df = fromCSV(csv, { runtime: rt });
+          // Force utf8 dtype so that numeric-looking strings like "0" or "1"
+          // are not inferred as i32/f64 by the type-inference ladder. The
+          // inference ladder is tested separately; this property tests that
+          // arbitrary strings survive the CSV encode/decode cycle when the
+          // column dtype is explicitly declared as utf8.
+          const df = fromCSV(csv, { dtypes: { s: 'utf8' }, runtime: rt });
           try {
             const out = df.toColumns()['s'];
             expect(out).toEqual(vals);

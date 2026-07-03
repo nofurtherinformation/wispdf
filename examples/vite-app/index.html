@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>skidi — Vite demo</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 2rem; background: #f8f9fa; }
+      h1 { color: #2c3e50; }
+      pre { background: #2c3e50; color: #ecf0f1; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+      table { border-collapse: collapse; margin: 1rem 0; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+      th, td { padding: 0.5rem 1rem; border: 1px solid #dee2e6; text-align: right; }
+      th { background: #343a40; color: white; text-align: center; }
+      td:first-child, th:first-child { text-align: left; }
+      .status { padding: 0.4rem 0.8rem; border-radius: 4px; display: inline-block; margin-top: 0.5rem; }
+      .ok { background: #d4edda; color: #155724; }
+      .err { background: #f8d7da; color: #721c24; }
+    </style>
+  </head>
+  <body>
+    <h1>skidi v0.1.0 — Vite demo</h1>
+    <p>100 000-row pipeline: <code>filter(a &gt; 0.5) → groupby(g) → sum(a)</code></p>
+    <div id="status">Loading wasm…</div>
+    <div id="result"></div>
+    <div id="log"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

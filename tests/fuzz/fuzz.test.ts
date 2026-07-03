@@ -189,84 +189,98 @@ describe('public API fuzz — random pipelines vs naive oracle', () => {
     );
   });
 
-  it('terminal groupby-agg vs oracle', () => {
-    type AggFn = 'sum' | 'mean' | 'count' | 'min' | 'max';
-    const aggArb: fc.Arbitrary<AggFn> = fc.constantFrom('sum', 'mean', 'count', 'min', 'max');
+  // ── Shared groupby-agg property (reused by main test + pinned seeds) ──────────
+  type AggFn = 'sum' | 'mean' | 'count' | 'min' | 'max';
 
-    fc.assert(
-      fc.property(frameArb, pipelineArb, aggArb, ({ a, b, g, flag }, steps, aggFn) => {
-        const init = makeDF(rt, { a, b, g, flag }, { a: 'f64', b: 'i32', g: 'utf8', flag: 'bool' });
-        const ownedFrames: DataFrame[] = [init];
-        try {
-          let current: DataFrame = init;
-          let oracle: OFrame = makeOracleFrame(
-            a as (number | null)[],
-            b as (number | null)[],
-            g as (string | null)[],
-            flag as (boolean | null)[],
-          );
+  function groupbyAggProperty(aggFnArb: fc.Arbitrary<AggFn>) {
+    return fc.property(frameArb, pipelineArb, aggFnArb, ({ a, b, g, flag }, steps, aggFn) => {
+      const init = makeDF(rt, { a, b, g, flag }, { a: 'f64', b: 'i32', g: 'utf8', flag: 'bool' });
+      const ownedFrames: DataFrame[] = [init];
+      try {
+        let current: DataFrame = init;
+        let oracle: OFrame = makeOracleFrame(
+          a as (number | null)[],
+          b as (number | null)[],
+          g as (string | null)[],
+          flag as (boolean | null)[],
+        );
 
-          for (const step of steps) {
-            const next = applyLibStep(current, step);
-            ownedFrames.push(next);
-            oracle = applyOracleStep(oracle, step);
-            current = next;
-          }
-
-          // Terminal groupby
-          const aggResult = current.groupby('g').agg({ a: aggFn });
-          ownedFrames.push(aggResult);
-          const oracleAgg = oracleGroupbyAgg(oracle, 'g', 'a', aggFn);
-
-          // Sort lib result by 'g' to match oracle sort
-          const sortedAgg = aggResult.sortValues('g', { descending: false });
-          ownedFrames.push(sortedAgg);
-
-          const libCols = sortedAgg.toColumns();
-          expect(libCols['g']?.length ?? 0, 'group count matches oracle').toBe(oracleAgg.length);
-
-          // Build maps for comparison (key → aggregated value)
-          const libMap = new Map<Cell, Cell>();
-          const libG = libCols['g'] ?? [];
-          const libA = libCols['a'] ?? [];
-          for (let i = 0; i < libG.length; i++) {
-            libMap.set(libG[i] ?? null, libA[i] ?? null);
-          }
-
-          for (const oracleRow of oracleAgg) {
-            const oKey = oracleRow['g'] ?? null;
-            const oVal = oracleRow['a'] ?? null;
-            const lVal = libMap.has(oKey) ? (libMap.get(oKey) ?? null) : undefined;
-            if (lVal === undefined) {
-              throw new Error(`groupby key ${JSON.stringify(oKey)} missing from library output`);
-            }
-            // Use relative tolerance for mean (floating point accumulation differs)
-            if (aggFn === 'mean' || aggFn === 'sum') {
-              if (oVal === null && lVal !== null) {
-                throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=${JSON.stringify(lVal)} oracle=null`);
-              }
-              if (oVal !== null && lVal === null) {
-                throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=null oracle=${JSON.stringify(oVal)}`);
-              }
-              if (oVal !== null && lVal !== null) {
-                const diff = Math.abs((lVal as number) - (oVal as number));
-                const mag = Math.max(Math.abs(oVal as number), 1);
-                if (diff / mag > 1e-9) {
-                  throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=${lVal} oracle=${oVal} diff=${diff}`);
-                }
-              }
-            } else {
-              if (!cellEq(lVal, oVal)) {
-                throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=${JSON.stringify(lVal)} oracle=${JSON.stringify(oVal)}`);
-              }
-            }
-          }
-        } finally {
-          for (const df of ownedFrames) df.dispose();
+        for (const step of steps) {
+          const next = applyLibStep(current, step);
+          ownedFrames.push(next);
+          oracle = applyOracleStep(oracle, step);
+          current = next;
         }
-      }),
-      { numRuns: NUM_RUNS },
-    );
+
+        // Terminal groupby
+        const aggResult = current.groupby('g').agg({ a: aggFn });
+        ownedFrames.push(aggResult);
+        const oracleAgg = oracleGroupbyAgg(oracle, 'g', 'a', aggFn);
+
+        // Sort lib result by 'g' to match oracle sort
+        const sortedAgg = aggResult.sortValues('g', { descending: false });
+        ownedFrames.push(sortedAgg);
+
+        const libCols = sortedAgg.toColumns();
+        expect(libCols['g']?.length ?? 0, 'group count matches oracle').toBe(oracleAgg.length);
+
+        // Build maps for comparison (key → aggregated value)
+        const libMap = new Map<Cell, Cell>();
+        const libG = libCols['g'] ?? [];
+        const libA = libCols['a'] ?? [];
+        for (let i = 0; i < libG.length; i++) {
+          libMap.set(libG[i] ?? null, libA[i] ?? null);
+        }
+
+        for (const oracleRow of oracleAgg) {
+          const oKey = oracleRow['g'] ?? null;
+          const oVal = oracleRow['a'] ?? null;
+          const lVal = libMap.has(oKey) ? (libMap.get(oKey) ?? null) : undefined;
+          if (lVal === undefined) {
+            throw new Error(`groupby key ${JSON.stringify(oKey)} missing from library output`);
+          }
+          // Use relative tolerance for mean/sum (floating point accumulation differs)
+          if (aggFn === 'mean' || aggFn === 'sum') {
+            if (oVal === null && lVal !== null) {
+              throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=${JSON.stringify(lVal)} oracle=null`);
+            }
+            if (oVal !== null && lVal === null) {
+              throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=null oracle=${JSON.stringify(oVal)}`);
+            }
+            if (oVal !== null && lVal !== null) {
+              const diff = Math.abs((lVal as number) - (oVal as number));
+              const mag = Math.max(Math.abs(oVal as number), 1);
+              if (diff / mag > 1e-9) {
+                throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=${lVal} oracle=${oVal} diff=${diff}`);
+              }
+            }
+          } else {
+            if (!cellEq(lVal, oVal)) {
+              throw new Error(`groupby ${aggFn}[${JSON.stringify(oKey)}]: lib=${JSON.stringify(lVal)} oracle=${JSON.stringify(oVal)}`);
+            }
+          }
+        }
+      } finally {
+        for (const df of ownedFrames) df.dispose();
+      }
+    });
+  }
+
+  const aggArb: fc.Arbitrary<AggFn> = fc.constantFrom('sum', 'mean', 'count', 'min', 'max');
+
+  it('terminal groupby-agg vs oracle', () => {
+    fc.assert(groupbyAggProperty(aggArb), { numRuns: NUM_RUNS });
+  });
+
+  // Pinned seeds: these previously exposed the oracle NaN/null conflation bug
+  // (oracle excluded NaN from group values, causing count to return 0 for NaN rows).
+  // After fixing oracle.ts §4 compliance, both seeds must pass.
+  it('pinned seed 141263226 — groupby NaN/null oracle regression', () => {
+    fc.assert(groupbyAggProperty(aggArb), { seed: 141263226, numRuns: 50 });
+  });
+
+  it('pinned seed 2099073632 — groupby NaN/null oracle regression', () => {
+    fc.assert(groupbyAggProperty(aggArb), { seed: 2099073632, numRuns: 50 });
   });
 
   it('select keeps only the requested columns', () => {
