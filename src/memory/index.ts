@@ -48,6 +48,7 @@ export {
 
 export {
   writeDictionary,
+  writeDictionaryFromRawBytes,
   decodeSlot,
   decodeDictionary,
   decodeStats,
