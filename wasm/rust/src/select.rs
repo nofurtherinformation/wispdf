@@ -972,3 +972,67 @@ impl_topk!(topk_f64, f64, topk_heap_lt_f64, topk_output_lt_f64);
 impl_topk!(topk_f32, f32, topk_heap_lt_f32, topk_output_lt_f32);
 impl_topk!(topk_i32, i32, topk_heap_lt_i32, topk_output_lt_i32);
 impl_topk!(topk_u32, u32, topk_heap_lt_u32, topk_output_lt_u32);
+
+// ========================================================================
+// § i64 select kernels (v2.3) — wasm-abi.md §10
+// ========================================================================
+
+impl_filter!(filter_i64, i64);
+impl_gather!(gather_i64, i64);
+
+#[inline(always)]
+unsafe fn argsort_cmp_i64(
+    data: *const i64,
+    vp: *const u8,
+    desc: bool,
+    a: i32,
+    b: i32,
+) -> core::cmp::Ordering {
+    use core::cmp::Ordering::{Equal, Greater, Less};
+    let a_valid = is_valid(vp, a as usize);
+    let b_valid = is_valid(vp, b as usize);
+    match (a_valid, b_valid) {
+        (false, false) => return Equal,
+        (false, true)  => return Greater,
+        (true,  false) => return Less,
+        (true,  true)  => {}
+    }
+    let av = *data.add(a as usize);
+    let bv = *data.add(b as usize);
+    if desc { bv.cmp(&av) } else { av.cmp(&bv) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn argsort_i64(
+    data_ptr: *const i64,
+    vp: *const u8,
+    inout_perm: *mut i32,
+    len: u32,
+    desc: i32,
+    scratch_ptr: *mut i32,
+) {
+    let n = len as usize;
+    if n <= 1 { return; }
+    let d = desc != 0;
+    stable_sort_perm_scratch(inout_perm, n, scratch_ptr, |a, b| {
+        argsort_cmp_i64(data_ptr, vp, d, a, b)
+    });
+}
+
+#[inline(always)]
+unsafe fn topk_heap_lt_i64(a: i32, b: i32, data: *const i64, largest: bool) -> bool {
+    let av = *data.add(a as usize);
+    let bv = *data.add(b as usize);
+    if largest { av < bv || (av == bv && a > b) }
+    else       { av > bv || (av == bv && a > b) }
+}
+
+#[inline(always)]
+unsafe fn topk_output_lt_i64(a: i32, b: i32, data: *const i64, largest: bool) -> bool {
+    let av = *data.add(a as usize);
+    let bv = *data.add(b as usize);
+    if largest { av > bv || (av == bv && a < b) }
+    else       { av < bv || (av == bv && a < b) }
+}
+
+impl_topk!(topk_i64, i64, topk_heap_lt_i64, topk_output_lt_i64);

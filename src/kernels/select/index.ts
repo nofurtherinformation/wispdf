@@ -35,6 +35,7 @@ export interface SelectWasm {
   argsort_f32(data: number, vp: number, perm: number, len: number, desc: number, scratch: number): void;
   argsort_i32(data: number, vp: number, perm: number, len: number, desc: number, scratch: number): void;
   argsort_u32(data: number, vp: number, perm: number, len: number, desc: number, scratch: number): void;
+  argsort_i64(data: number, vp: number, perm: number, len: number, desc: number, scratch: number): void;
   /** Kept compiled; not called by this dispatch layer (ABI v1.2). */
   filter_indices(mask: number, out_idx: number, len: number): number;
 }
@@ -187,3 +188,12 @@ export const topk_i32 = (w: SelectWasm, data: number, vp: number, k: number, out
   w.topk_i32(data, vp, k, outIdx, len, largest);
 export const topk_u32 = (w: SelectWasm, data: number, vp: number, k: number, outIdx: number, len: number, largest: number): number =>
   w.topk_u32(data, vp, k, outIdx, len, largest);
+
+// ── i64 select stubs (v2.3) ──────────────────────────────────────────────────
+
+export const filter_i64 = (w: SelectWasm, data: number, mask: number, out: number, len: number): number =>
+  w.filter_i64(data, mask, out, len);
+export const gather_i64 = (w: SelectWasm, data: number, idx: number, idxLen: number, out: number): void =>
+  w.gather_i64(data, idx, idxLen, out);
+export const topk_i64   = (w: SelectWasm, data: number, vp: number, k: number, outIdx: number, len: number, largest: number): number =>
+  w.topk_i64(data, vp, k, outIdx, len, largest);

@@ -531,3 +531,28 @@ pub unsafe extern "C" fn join_hash_left(
 
     total
 }
+
+// ========================================================================
+// § i64 hash kernel (v2.3) — wasm-abi.md §10
+// ========================================================================
+
+/// Hash a column of `i64` values.
+///
+/// Non-null: `splitmix64(value as u64) as i64`.
+/// Null: `H_NULL`.
+#[no_mangle]
+pub unsafe extern "C" fn hash_i64(
+    data: *const i64,
+    vp: *const u8,
+    out_hash: *mut i64,
+    len: u32,
+) {
+    let len = len as usize;
+    for i in 0..len {
+        *out_hash.add(i) = if is_valid(vp, i) {
+            splitmix64(*data.add(i) as u64) as i64
+        } else {
+            H_NULL
+        };
+    }
+}

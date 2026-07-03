@@ -212,3 +212,49 @@ export const is_null = (w: ElementwiseWasm, vp: number, out: number, len: number
 
 /** Expand an Arrow-LSB bitmask (1 bit/elem) to a u8 bool column (1 byte/elem). */
 export const expand_mask_bool = (w: ElementwiseWasm, mask: number, out: number, len: number) => w.expand_mask_bool(mask, out, len);
+
+// ── i64 arithmetic (v2.3) — scalars cross as wasm i64 → JS bigint ───────────
+
+export const add_i64    = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.add_i64(a, b, out, len);
+export const sub_i64    = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.sub_i64(a, b, out, len);
+export const mul_i64    = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.mul_i64(a, b, out, len);
+export const div_i64    = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.div_i64(a, b, out, len);
+export const mod_i64    = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.mod_i64(a, b, out, len);
+
+export const add_i64_scalar = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.add_i64_scalar(a, s, out, len);
+export const sub_i64_scalar = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.sub_i64_scalar(a, s, out, len);
+export const mul_i64_scalar = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.mul_i64_scalar(a, s, out, len);
+export const div_i64_scalar = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.div_i64_scalar(a, s, out, len);
+export const mod_i64_scalar = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.mod_i64_scalar(a, s, out, len);
+
+export const neg_i64 = (w: ElementwiseWasm, a: number, out: number, len: number) => w.neg_i64(a, out, len);
+
+// i64 comparison masks (s is bigint for scalar variants)
+export const gt_i64_mask = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.gt_i64_mask(a, b, out, len);
+export const ge_i64_mask = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.ge_i64_mask(a, b, out, len);
+export const lt_i64_mask = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.lt_i64_mask(a, b, out, len);
+export const le_i64_mask = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.le_i64_mask(a, b, out, len);
+export const eq_i64_mask = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.eq_i64_mask(a, b, out, len);
+export const ne_i64_mask = (w: ElementwiseWasm, a: number, b: number, out: number, len: number) => w.ne_i64_mask(a, b, out, len);
+
+export const gt_i64_scalar_mask = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.gt_i64_scalar_mask(a, s, out, len);
+export const ge_i64_scalar_mask = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.ge_i64_scalar_mask(a, s, out, len);
+export const lt_i64_scalar_mask = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.lt_i64_scalar_mask(a, s, out, len);
+export const le_i64_scalar_mask = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.le_i64_scalar_mask(a, s, out, len);
+export const eq_i64_scalar_mask = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.eq_i64_scalar_mask(a, s, out, len);
+export const ne_i64_scalar_mask = (w: ElementwiseWasm, a: number, s: bigint, out: number, len: number) => w.ne_i64_scalar_mask(a, s, out, len);
+
+// i64 casts
+export const cast_f64_i64  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_f64_i64(i, ivp, o, ovp, len);
+export const cast_f32_i64  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_f32_i64(i, ivp, o, ovp, len);
+export const cast_i32_i64  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_i32_i64(i, ivp, o, ovp, len);
+export const cast_u32_i64  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_u32_i64(i, ivp, o, ovp, len);
+export const cast_bool_i64 = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_bool_i64(i, ivp, o, ovp, len);
+export const cast_i64_f64  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_i64_f64(i, ivp, o, ovp, len);
+export const cast_i64_f32  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_i64_f32(i, ivp, o, ovp, len);
+export const cast_i64_i32  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_i64_i32(i, ivp, o, ovp, len);
+export const cast_i64_u32  = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_i64_u32(i, ivp, o, ovp, len);
+export const cast_i64_bool = (w: ElementwiseWasm, i: number, ivp: number, o: number, ovp: number, len: number) => w.cast_i64_bool(i, ivp, o, ovp, len);
+
+/** Replace nulls with a bigint fill value. in_vp=0 → all-valid fast copy. */
+export const fill_null_i64 = (w: ElementwiseWasm, inp: number, ivp: number, fill: bigint, out: number, len: number) => w.fill_null_i64(inp, ivp, fill, out, len);

@@ -1579,3 +1579,479 @@ pub unsafe extern "C" fn expand_mask_bool(mask: *const u8, out_u8: *mut u8, len:
         *out_u8.add(i) = (*mask.add(i >> 3) >> (i & 7)) & 1;
     }
 }
+
+// ========================================================================
+// § i64 kernels (v2.3) — wasm-abi.md §10
+//
+// SIMD policy (§10.5): i64x2 for add/sub/neg/comparisons only.
+// mul/div/mod are scalar in BOTH builds (no i64x2.mul in WASM SIMD128).
+// ========================================================================
+
+// ── i64 binary arithmetic ─────────────────────────────────────────────────────
+
+macro_rules! int64_bin {
+    ($fn_name:ident, $wrapping:ident, $simd_op:ident) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $fn_name(
+            a: *const i64,
+            b: *const i64,
+            out: *mut i64,
+            len: u32,
+        ) {
+            let n = len as usize;
+            let mut i = 0usize;
+            #[cfg(target_feature = "simd128")]
+            {
+                while i + 2 <= n {
+                    core::arch::wasm32::v128_store(
+                        out.add(i) as *mut v128,
+                        core::arch::wasm32::$simd_op(
+                            core::arch::wasm32::v128_load(a.add(i) as *const v128),
+                            core::arch::wasm32::v128_load(b.add(i) as *const v128),
+                        ),
+                    );
+                    i += 2;
+                }
+            }
+            while i < n {
+                *out.add(i) = (*a.add(i)).$wrapping(*b.add(i));
+                i += 1;
+            }
+        }
+    };
+}
+
+int64_bin!(add_i64, wrapping_add, i64x2_add);
+int64_bin!(sub_i64, wrapping_sub, i64x2_sub);
+
+// mul/div/mod: scalar only (no i64x2.mul in WASM SIMD128)
+
+#[no_mangle]
+pub unsafe extern "C" fn mul_i64(a: *const i64, b: *const i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    for i in 0..n {
+        *out.add(i) = (*a.add(i)).wrapping_mul(*b.add(i));
+    }
+}
+
+// Guard zero divisor; wrapping_div handles MIN/-1 → MIN without panic.
+#[no_mangle]
+pub unsafe extern "C" fn div_i64(a: *const i64, b: *const i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    for i in 0..n {
+        let bv = *b.add(i);
+        *out.add(i) = if bv == 0 { 0 } else { (*a.add(i)).wrapping_div(bv) };
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mod_i64(a: *const i64, b: *const i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    for i in 0..n {
+        let bv = *b.add(i);
+        *out.add(i) = if bv == 0 { 0 } else { (*a.add(i)).wrapping_rem(bv) };
+    }
+}
+
+// ── i64 scalar arithmetic ─────────────────────────────────────────────────────
+
+macro_rules! int64_scalar {
+    ($fn_name:ident, $wrapping:ident, $simd_splat:ident, $simd_op:ident) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $fn_name(
+            a: *const i64,
+            s: i64,
+            out: *mut i64,
+            len: u32,
+        ) {
+            let n = len as usize;
+            let mut i = 0usize;
+            #[cfg(target_feature = "simd128")]
+            {
+                let vs = core::arch::wasm32::$simd_splat(s);
+                while i + 2 <= n {
+                    core::arch::wasm32::v128_store(
+                        out.add(i) as *mut v128,
+                        core::arch::wasm32::$simd_op(
+                            core::arch::wasm32::v128_load(a.add(i) as *const v128),
+                            vs,
+                        ),
+                    );
+                    i += 2;
+                }
+            }
+            while i < n {
+                *out.add(i) = (*a.add(i)).$wrapping(s);
+                i += 1;
+            }
+        }
+    };
+}
+
+int64_scalar!(add_i64_scalar, wrapping_add, i64x2_splat, i64x2_add);
+int64_scalar!(sub_i64_scalar, wrapping_sub, i64x2_splat, i64x2_sub);
+
+#[no_mangle]
+pub unsafe extern "C" fn mul_i64_scalar(a: *const i64, s: i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    for i in 0..n { *out.add(i) = (*a.add(i)).wrapping_mul(s); }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn div_i64_scalar(a: *const i64, s: i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    for i in 0..n {
+        *out.add(i) = if s == 0 { 0 } else { (*a.add(i)).wrapping_div(s) };
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mod_i64_scalar(a: *const i64, s: i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    for i in 0..n {
+        *out.add(i) = if s == 0 { 0 } else { (*a.add(i)).wrapping_rem(s) };
+    }
+}
+
+// ── neg_i64 ───────────────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub unsafe extern "C" fn neg_i64(a: *const i64, out: *mut i64, len: u32) {
+    let n = len as usize;
+    let mut i = 0usize;
+    #[cfg(target_feature = "simd128")]
+    {
+        while i + 2 <= n {
+            core::arch::wasm32::v128_store(
+                out.add(i) as *mut v128,
+                core::arch::wasm32::i64x2_neg(
+                    core::arch::wasm32::v128_load(a.add(i) as *const v128),
+                ),
+            );
+            i += 2;
+        }
+    }
+    while i < n {
+        *out.add(i) = (*a.add(i)).wrapping_neg();
+        i += 1;
+    }
+}
+
+// ── i64 comparison masks (signed) — 8-element SIMD batch like f64 ────────────
+// i64x2 has 2 lanes; i64x2_bitmask extracts bit[63] of each 64-bit lane.
+
+macro_rules! cmp_i64s_mask {
+    ($fn_name:ident, $scalar_op:tt, $simd_cmp:ident) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $fn_name(
+            a: *const i64,
+            b: *const i64,
+            out: *mut u8,
+            len: u32,
+        ) {
+            let n = len as usize;
+            zero_bytes(out, n.div_ceil(8));
+            let mut i = 0usize;
+            #[cfg(target_feature = "simd128")]
+            {
+                while i + 8 <= n {
+                    let a0 = core::arch::wasm32::v128_load(a.add(i    ) as *const v128);
+                    let b0 = core::arch::wasm32::v128_load(b.add(i    ) as *const v128);
+                    let a1 = core::arch::wasm32::v128_load(a.add(i + 2) as *const v128);
+                    let b1 = core::arch::wasm32::v128_load(b.add(i + 2) as *const v128);
+                    let a2 = core::arch::wasm32::v128_load(a.add(i + 4) as *const v128);
+                    let b2 = core::arch::wasm32::v128_load(b.add(i + 4) as *const v128);
+                    let a3 = core::arch::wasm32::v128_load(a.add(i + 6) as *const v128);
+                    let b3 = core::arch::wasm32::v128_load(b.add(i + 6) as *const v128);
+                    let m0 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a0, b0)) as u8;
+                    let m1 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a1, b1)) as u8;
+                    let m2 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a2, b2)) as u8;
+                    let m3 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a3, b3)) as u8;
+                    *out.add(i >> 3) = m0 | (m1 << 2) | (m2 << 4) | (m3 << 6);
+                    i += 8;
+                }
+            }
+            while i < n {
+                if *a.add(i) $scalar_op *b.add(i) {
+                    *out.add(i >> 3) |= 1u8 << (i & 7);
+                }
+                i += 1;
+            }
+        }
+    };
+}
+
+cmp_i64s_mask!(gt_i64_mask, >,  i64x2_gt);
+cmp_i64s_mask!(ge_i64_mask, >=, i64x2_ge);
+cmp_i64s_mask!(lt_i64_mask, <,  i64x2_lt);
+cmp_i64s_mask!(le_i64_mask, <=, i64x2_le);
+cmp_i64s_mask!(eq_i64_mask, ==, i64x2_eq);
+cmp_i64s_mask!(ne_i64_mask, !=, i64x2_ne);
+
+// ── i64 scalar comparison masks ───────────────────────────────────────────────
+
+macro_rules! cmp_i64s_scalar_mask {
+    ($fn_name:ident, $scalar_op:tt, $simd_splat:ident, $simd_cmp:ident) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $fn_name(
+            a: *const i64,
+            s: i64,
+            out: *mut u8,
+            len: u32,
+        ) {
+            let n = len as usize;
+            zero_bytes(out, n.div_ceil(8));
+            let mut i = 0usize;
+            #[cfg(target_feature = "simd128")]
+            {
+                let vs = core::arch::wasm32::$simd_splat(s);
+                while i + 8 <= n {
+                    let a0 = core::arch::wasm32::v128_load(a.add(i    ) as *const v128);
+                    let a1 = core::arch::wasm32::v128_load(a.add(i + 2) as *const v128);
+                    let a2 = core::arch::wasm32::v128_load(a.add(i + 4) as *const v128);
+                    let a3 = core::arch::wasm32::v128_load(a.add(i + 6) as *const v128);
+                    let m0 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a0, vs)) as u8;
+                    let m1 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a1, vs)) as u8;
+                    let m2 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a2, vs)) as u8;
+                    let m3 = core::arch::wasm32::i64x2_bitmask(core::arch::wasm32::$simd_cmp(a3, vs)) as u8;
+                    *out.add(i >> 3) = m0 | (m1 << 2) | (m2 << 4) | (m3 << 6);
+                    i += 8;
+                }
+            }
+            while i < n {
+                if *a.add(i) $scalar_op s {
+                    *out.add(i >> 3) |= 1u8 << (i & 7);
+                }
+                i += 1;
+            }
+        }
+    };
+}
+
+cmp_i64s_scalar_mask!(gt_i64_scalar_mask, >,  i64x2_splat, i64x2_gt);
+cmp_i64s_scalar_mask!(ge_i64_scalar_mask, >=, i64x2_splat, i64x2_ge);
+cmp_i64s_scalar_mask!(lt_i64_scalar_mask, <,  i64x2_splat, i64x2_lt);
+cmp_i64s_scalar_mask!(le_i64_scalar_mask, <=, i64x2_splat, i64x2_le);
+cmp_i64s_scalar_mask!(eq_i64_scalar_mask, ==, i64x2_splat, i64x2_eq);
+cmp_i64s_scalar_mask!(ne_i64_scalar_mask, !=, i64x2_splat, i64x2_ne);
+
+// ── i64 cast functions ────────────────────────────────────────────────────────
+
+/// f64 → i64: truncate toward 0. NaN/±Inf/out-of-range → null.
+/// prevDouble(2^63) = 9223372036854774784.0 < 2^63 → VALID (dtypes.md §7.1).
+#[no_mangle]
+pub unsafe extern "C" fn cast_f64_i64(
+    inp: *const f64, in_vp: *const u8,
+    out: *mut i64,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    const LO: f64 = -9_223_372_036_854_775_808.0_f64;
+    const HI: f64 =  9_223_372_036_854_775_808.0_f64;
+    for i in 0..n {
+        if vbit(in_vp, i) == 0 { *out.add(i) = 0; continue; }
+        let v = *inp.add(i);
+        if (LO..HI).contains(&v) {
+            *out.add(i) = v as i64;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// f32 → i64: widen to f64 first, same range check.
+#[no_mangle]
+pub unsafe extern "C" fn cast_f32_i64(
+    inp: *const f32, in_vp: *const u8,
+    out: *mut i64,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    const LO: f64 = -9_223_372_036_854_775_808.0_f64;
+    const HI: f64 =  9_223_372_036_854_775_808.0_f64;
+    for i in 0..n {
+        if vbit(in_vp, i) == 0 { *out.add(i) = 0; continue; }
+        let v = *inp.add(i) as f64;
+        if (LO..HI).contains(&v) {
+            *out.add(i) = v as i64;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// i32 → i64: sign-extend. Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_i32_i64(
+    inp: *const i32, in_vp: *const u8,
+    out: *mut i64,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = *inp.add(i) as i64;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// u32 → i64: zero-extend. Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_u32_i64(
+    inp: *const u32, in_vp: *const u8,
+    out: *mut i64,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = *inp.add(i) as i64;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// bool → i64: true→1, false→0. Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_bool_i64(
+    inp: *const u8, in_vp: *const u8,
+    out: *mut i64,  out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = (*inp.add(i) & 1) as i64;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// i64 → f64: nearest-even rounding via Rust `as`. Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_i64_f64(
+    inp: *const i64, in_vp: *const u8,
+    out: *mut f64,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = *inp.add(i) as f64;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0.0;
+        }
+    }
+}
+
+/// i64 → f32: nearest-even rounding. Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_i64_f32(
+    inp: *const i64, in_vp: *const u8,
+    out: *mut f32,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = *inp.add(i) as f32;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0.0;
+        }
+    }
+}
+
+/// i64 → i32: wrap-truncate (low 32 bits). Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_i64_i32(
+    inp: *const i64, in_vp: *const u8,
+    out: *mut i32,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = *inp.add(i) as i32;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// i64 → u32: wrap-truncate (low 32 bits, unsigned view). Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_i64_u32(
+    inp: *const i64, in_vp: *const u8,
+    out: *mut u32,   out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = *inp.add(i) as u32;
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+/// i64 → bool: x≠0 → 1, x=0 → 0. Always valid when input is valid.
+#[no_mangle]
+pub unsafe extern "C" fn cast_i64_bool(
+    inp: *const i64, in_vp: *const u8,
+    out: *mut u8,    out_vp: *mut u8,
+    len: u32,
+) {
+    let n = len as usize;
+    zero_bytes(out_vp, n.div_ceil(8));
+    for i in 0..n {
+        if vbit(in_vp, i) != 0 {
+            *out.add(i) = if *inp.add(i) != 0 { 1 } else { 0 };
+            *out_vp.add(i >> 3) |= 1u8 << (i & 7);
+        } else {
+            *out.add(i) = 0;
+        }
+    }
+}
+
+// ── fill_null_i64 ─────────────────────────────────────────────────────────────
+
+/// Replace null slots with fill value. in_vp=0 → all-valid fast copy.
+#[no_mangle]
+pub unsafe extern "C" fn fill_null_i64(
+    inp: *const i64, in_vp: *const u8,
+    fill: i64,
+    out: *mut i64,
+    len: u32,
+) {
+    let n = len as usize;
+    if in_vp.is_null() {
+        for i in 0..n { *out.add(i) = *inp.add(i); }
+        return;
+    }
+    for i in 0..n {
+        *out.add(i) = if vbit(in_vp, i) != 0 { *inp.add(i) } else { fill };
+    }
+}
