@@ -18,7 +18,7 @@
   "author": "Dylan Halpern <halperndc@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TODO/wispdf.git"
+    "url": "git+https://github.com/nofurtherinformation/wispdf.git"
   },
   "type": "module",
   "engines": {
