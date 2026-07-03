@@ -402,3 +402,15 @@ dayOfYear quarter`. (For `date32`, time-of-day fields are `0`.)
   `timestamp→date32` is JS-side floor-div (§7.2). Reinterpret casts emit no kernel.
 - `dt` accessors are JS-side (no kernel); tz-aware ones use the cached
   `Intl.DateTimeFormat`.
+
+## §13 — `str` namespace v1 (census-perf, 2026-07-03)
+
+- `col('g').str.slice(start, end?)` → `utf8`. **JS `String.prototype.slice` semantics**
+  (negative indices from the end; `end` omitted = to end; out-of-range clamps; UTF-16
+  code-unit indexing, same as every JS string API — document the surrogate-pair caveat).
+- Null propagation: null rows stay null; the operation never inspects null rows.
+- **Implementation contract:** applied to the **dictionary values once** (O(unique)),
+  producing sliced values that are re-deduplicated into the result dictionary; row
+  indices are remapped, never iterated per-row on the JS side beyond the index remap.
+- Other `str` ops (len, upper/lower, startsWith, …) stay in the v2 parking lot until a
+  workload needs them (YAGNI); they must follow the same dictionary-values contract.

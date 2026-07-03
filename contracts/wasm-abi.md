@@ -484,3 +484,31 @@ that dispatch to a **physical kernel token** (ADR-010 registry; `DTypeInfo.wasm`
 
 Consequence: **no wasm binary grows for temporals**; the §1 75 KB-gzipped size budget is
 affected only by the i64 kernels of §10.
+
+---
+
+## 12. v2.2 amendment — census-perf workstream (orchestrator, 2026-07-03)
+
+**Motivation:** a real 85K-row workload joining on a ~unique `utf8` key measured 4×
+slower than Arquero end-to-end (bead `dataframe-4w8`); the JS-side dictionary
+unification deferred in §9 ("revisit with a benchmark if profiling shows it hot") is
+hot, and dictionary ingest of high-cardinality strings dominates load time.
+
+**New export (hash family, both builds, identical results):**
+| Export | Signature | Semantics |
+|---|---|---|
+| `hash_utf8_dict` | `(i32 offsets_ptr, i32 bytes_ptr, i32 dict_count, i32 out_hash_ptr) -> ()` | For each dictionary slot `k in 0..dict_count`, hash the raw UTF-8 bytes `bytes[offsets[k]..offsets[k+1])` to a 64-bit hash written to `out_hash[k]` (`i64[dict_count]`). Deterministic, identical across builds, same hash-quality class as `hash_dt` (splitmix64-finalized byte mixing is fine; document the exact scheme in code). Empty string hashes to a fixed non-zero value. `H_NULL` is NOT involved (row nullness lives in row validity, not the dictionary). |
+
+**Join path change (no observable semantics change):** utf8 equi-joins no longer unify
+dictionaries. Each side computes `hash_utf8_dict` over its own dictionary once, rows
+gather their key hash via `gather_i64(dict_hashes, indices)`, and `join_hash_inner/left`
+consume those hashes unchanged (row validity still excludes nulls per §9). Output key
+columns reuse the **left** dictionary (inner: all emitted keys exist on the left; left
+join: identical). 64-bit collision risk is unchanged in class from ADR-005 and remains
+accepted+documented. Dictionary unification (`src/memory/dictionary.ts`) remains for
+concat-style ops; joins simply stop calling it.
+
+**Ingest note (within ADR-002):** `fromArrow`/dictionary build may dedup on raw UTF-8
+bytes (e.g. via `hash_utf8_dict` + byte-compare on collision) without materializing JS
+strings; per-slot decode stays lazy/memoized (ADR-002 unchanged). Already-dictionary-
+encoded Arrow input passes its dictionary through without a rebuild.
