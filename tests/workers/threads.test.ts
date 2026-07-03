@@ -271,54 +271,100 @@ describe('parity — with nulls', () => {
 /* Test 5: fast-check property — random data + null patterns            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Catastrophic-cancellation-safe tolerance for parallel f64 sum.
+ *
+ * Parallel dispatch splits work into chunks and combines partial sums in a
+ * different order from single-thread; the rounding error is bounded by
+ *   |actSum - expSum| ≤ tol × Σ|validXi|
+ * rather than by relative error of the sum itself, which can be near zero when
+ * large positive and negative values cancel.  tol = 1e-10 gives a comfortable
+ * margin over worst-case float64 rounding with up to 256 elements × 4 chunks.
+ *
+ * Special cases handled:
+ *  - ±Infinity: exact equality fast-path (Inf === Inf, -Inf === -Inf).
+ *    Without it, Inf - Inf = NaN and Math.abs(NaN) = NaN, which compares
+ *    false to anything — a spurious failure.
+ *  - NaN sum (Inf + (-Inf) = NaN even with noNaN values): both-NaN fast-path.
+ *
+ * This is the documented ADR-006 deviation; see docs/threads.md.
+ */
+function sumWithinTol(actSum: number, expSum: number, values: number[], bits: number[]): boolean {
+  /* Fast-path: exact equality covers ±Infinity === ±Infinity and 0 === -0. */
+  if (actSum === expSum) return true;
+  /* Both NaN (e.g. Infinity + (-Infinity) in the data). */
+  if (Number.isNaN(actSum) && Number.isNaN(expSum)) return true;
+  /* Finite difference — use catastrophic-cancellation-safe bound. */
+  const absErr = Math.abs(actSum - expSum);
+  const scale = values.reduce((s, x, i) => s + ((bits[i] ?? 0) ? Math.abs(x) : 0), 0);
+  return absErr <= 1e-10 * scale + 1e-20;
+}
+
 describe('fast-check: parallel vs single-thread parity', () => {
+  /**
+   * Shared async property: parallel sum (catastrophic-cancellation-safe tolerance)
+   * and parallel min/max (bit-exact — order-insensitive reductions).
+   *
+   * min/max MUST be bit-exact: if they ever differ, the chunk combiner has a bug
+   * (see combineMinF64/combineMaxF64 in src/workers/parallel.ts).
+   */
+  function makeParity(thHandle: NonNullable<typeof th>) {
+    return fc.asyncProperty(
+      fc.array(fc.float({ noNaN: true }), { minLength: 8, maxLength: 256 }),
+      fc.array(fc.boolean(), { minLength: 1 }),
+      async (values, nullMask) => {
+        const len = values.length;
+        const bits = Array.from({ length: len }, (_, i) =>
+          nullMask[i % nullMask.length] ? 1 : 0,
+        );
+        const ptr = writeF64(thHandle, values);
+        const hasNull = bits.some((b) => b === 0);
+        const vp = hasNull ? writeValidity(thHandle, bits, len) : 0;
+
+        try {
+          /* Single-thread reference using same wasm/memory */
+          const expSum = thHandle.callKernel('sum_f64_null', ptr, vp, len);
+          const expMin = thHandle.callKernel('min_f64_null', ptr, vp, len);
+          const expMax = thHandle.callKernel('max_f64_null', ptr, vp, len);
+
+          /* Parallel dispatch */
+          const actSum = await thHandle.sumF64(ptr, vp, len);
+          const actMin = await thHandle.minF64(ptr, vp, len);
+          const actMax = await thHandle.maxF64(ptr, vp, len);
+
+          /* sum: catastrophic-cancellation-safe tolerance (extreme float32 values
+           * like ±3.4e38 can cancel to ~0, making simple relative error blow up).
+           * Tolerance is scaled by Σ|valid xi| — always non-zero when values exist.
+           * This is the documented ADR-006 FP deviation; see docs/threads.md. */
+          if (!sumWithinTol(actSum, expSum, values, bits)) return false;
+
+          /* min/max: bit-exact (order-insensitive); any difference is a combiner bug */
+          const eqMin =
+            (Number.isNaN(expMin) && Number.isNaN(actMin)) || expMin === actMin;
+          const eqMax =
+            (Number.isNaN(expMax) && Number.isNaN(actMax)) || expMax === actMax;
+          return eqMin && eqMax;
+        } finally {
+          thHandle.free(ptr);
+          if (vp !== 0) thHandle.free(vp);
+        }
+      },
+    );
+  }
+
   it('sum/min/max agree on random data+nulls (100 runs)', async () => {
     if (!th) return;
-    const thHandle = th;
-    await fc.assert(
-      fc.asyncProperty(
-        fc.array(fc.float({ noNaN: true }), { minLength: 8, maxLength: 256 }),
-        fc.array(fc.boolean(), { minLength: 1 }),
-        async (values, nullMask) => {
-          const len = values.length;
-          const bits = Array.from({ length: len }, (_, i) =>
-            nullMask[i % nullMask.length] ? 1 : 0,
-          );
-          const ptr = writeF64(thHandle, values);
-          const hasNull = bits.some((b) => b === 0);
-          const vp = hasNull ? writeValidity(thHandle, bits, len) : 0;
+    await fc.assert(makeParity(th), { numRuns: 100 });
+  }, 120_000);
 
-          try {
-            /* Single-thread reference using same wasm/memory */
-            const expSum = thHandle.callKernel('sum_f64_null', ptr, vp, len);
-            const expMin = thHandle.callKernel('min_f64_null', ptr, vp, len);
-            const expMax = thHandle.callKernel('max_f64_null', ptr, vp, len);
-
-            /* Parallel dispatch */
-            const actSum = await thHandle.sumF64(ptr, vp, len);
-            const actMin = await thHandle.minF64(ptr, vp, len);
-            const actMax = await thHandle.maxF64(ptr, vp, len);
-
-            /* sum: allow up to 1e-6 relative error (float32 accumulation is the
-             * spec-prescribed baseline and has limited precision) */
-            const relErrSum =
-              Math.abs(actSum - expSum) / (Math.abs(expSum) + 1e-15);
-            if (relErrSum > 1e-6) return false;
-
-            /* min/max: exactly equal or both NaN */
-            const eqMin =
-              (Number.isNaN(expMin) && Number.isNaN(actMin)) || expMin === actMin;
-            const eqMax =
-              (Number.isNaN(expMax) && Number.isNaN(actMax)) || expMax === actMax;
-            return eqMin && eqMax;
-          } finally {
-            thHandle.free(ptr);
-            if (vp !== 0) thHandle.free(vp);
-          }
-        },
-      ),
-      { numRuns: 100 },
-    );
+  /* Pinned seed: previously failed because the old relative-error check used
+   * (expSum + 1e-15) as the denominator, which rounds to ~1e-15 when large
+   * positive and negative floats cancel.  Confirmed: the failure was in SUM
+   * (catastrophic cancellation), NOT in min/max — the chunk combiner is correct.
+   * After switching to the sum(|x|)-scaled tolerance above, this seed passes. */
+  it('pinned seed 1711909037 — sum catastrophic cancellation regression', async () => {
+    if (!th) return;
+    await fc.assert(makeParity(th), { seed: 1711909037, numRuns: 50 });
   }, 120_000);
 });
 

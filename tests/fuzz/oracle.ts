@@ -142,12 +142,15 @@ export function oracleGroupbyAgg(
   aggCol: string,
   fn: 'sum' | 'mean' | 'count' | 'min' | 'max',
 ): ORow[] {
+  // Collect all non-null values per group.  NaN is a VALID value (validity bitmap = 1),
+  // NOT null — do not conflate NaN with null here.  See contracts/dtypes.md §4.
   const groups = new Map<Cell, number[]>();
   for (const r of frame) {
     const k = r[key] ?? null;
     const v = r[aggCol];
     if (!groups.has(k)) groups.set(k, []);
-    if (v !== null && (typeof v !== 'number' || !isNaN(v))) {
+    // Only null / undefined means "null" in the bitmap sense; NaN is a valid, non-null value.
+    if (v != null) {
       groups.get(k)!.push(v as number);
     }
   }
@@ -155,11 +158,29 @@ export function oracleGroupbyAgg(
   for (const [k, vals] of groups) {
     let agg: number | null;
     switch (fn) {
-      case 'sum': agg = vals.reduce((s, x) => s + x, 0); break;
-      case 'mean': agg = vals.length > 0 ? vals.reduce((s, x) => s + x, 0) / vals.length : null; break;
-      case 'count': agg = vals.length; break;
-      case 'min': agg = vals.length > 0 ? Math.min(...vals) : null; break;
-      case 'max': agg = vals.length > 0 ? Math.max(...vals) : null; break;
+      case 'sum':
+        // NaN poisons sum (spec §4.3: "a valid NaN in the data → result NaN").
+        agg = vals.reduce((s, x) => s + x, 0);
+        break;
+      case 'mean':
+        // NaN poisons mean.
+        agg = vals.length > 0 ? vals.reduce((s, x) => s + x, 0) / vals.length : null;
+        break;
+      case 'count':
+        // count = # non-null entries; NaN is non-null (spec §4.4).
+        agg = vals.length;
+        break;
+      case 'min': {
+        // NaN is skipped (IEEE compare, spec §4.3); all-NaN → no non-NaN candidates → null.
+        const nonNaN = vals.filter((x) => !Number.isNaN(x));
+        agg = nonNaN.length > 0 ? Math.min(...nonNaN) : null;
+        break;
+      }
+      case 'max': {
+        const nonNaN = vals.filter((x) => !Number.isNaN(x));
+        agg = nonNaN.length > 0 ? Math.max(...nonNaN) : null;
+        break;
+      }
     }
     rows.push({ [key]: k, [aggCol]: agg });
   }

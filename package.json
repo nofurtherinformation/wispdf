@@ -65,6 +65,7 @@
     "test": "vitest run",
     "test:scalar": "WASM_BUILD=scalar vitest run",
     "test:simd": "WASM_BUILD=simd vitest run",
+    "check:readme": "node scripts/check-readme.mjs",
     "gate": "npm run build && npm run test:scalar && npm run test:simd && node scripts/check-size.mjs",
     "gate:bench": "node scripts/check-regression.mjs",
     "fuzz": "node tests/fuzz/fuzz.mjs",

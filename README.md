@@ -97,17 +97,20 @@ const result = scope(() => {
 ### I/O
 
 ```typescript
-import { fromCSV, fromArrow, toArrow, fromJSON, toJSON } from 'skidi';
+import { init, DataFrame, fromCSV, fromArrow, toArrow, fromJSON, toJSON } from 'skidi';
+
+// Load the wasm runtime once at startup (needed for fromArrow)
+const rt = await init();
 
 // CSV (auto-infers dtypes)
-const df = await fromCSV(csvText, { delimiter: ',', hasHeader: true });
+const df = fromCSV(csvText, { delimiter: ',', header: true });
 
 // Arrow IPC (compatible with Apache Arrow; no runtime arrow dep needed)
 const buf = toArrow(df);
-const df2 = fromArrow(buf);
+const df2 = fromArrow(buf, rt);
 
 // JSON records
-const df3 = fromJSON([{ x: 1, y: 'a' }, { x: 2, y: 'b' }]);
+const df3 = DataFrame.fromRecords([{ x: 1, y: 'a' }, { x: 2, y: 'b' }]);
 const json = toJSON(df3);
 ```
 
@@ -151,14 +154,15 @@ this is not just documentation style; it's a reminder that the fast path exists.
 
 ## Benchmark table
 
-Measured 2026-07-02 on **Node 22, Apple M-series** (single thread, SIMD build).
-Numbers are median wall-clock milliseconds over 7 runs at 1M rows.
+Measured in **Docker (Debian bookworm), Node v22.23.1, Linux** (single thread, SIMD build).
+Numbers are medians of 3 independent fresh runs at 1M rows.
+Source: [`bench/baselines/e2e-v1.json`](bench/baselines/e2e-v1.json).
 
 | Operation | skidi (ms) | Arquero (ms) | Ratio |
 |---|---:|---:|---:|
-| filter → groupby → sum (pipeline) | 11.9 | 45.5 | **3.8× faster** |
-| join (inner, string key) | 22.4 | 38.9 | **1.7× faster** |
-| sortValues (f64, 1M rows) | 93.2 | 155.6 | **1.7× faster** |
+| filter → groupby → sum (pipeline) | 12.3 | 45.3 | **3.7× faster** |
+| join (inner, string key) | 68.6 | 120.6 | **1.8× faster** |
+| sortValues (f64, 1M rows) | 145.3 | 248.9 | **1.7× faster** |
 
 > **Caveats:** Arquero times include `.objects()` materialisation (that's what its
 > pipeline naturally produces); skidi times do not materialise to JS objects.
