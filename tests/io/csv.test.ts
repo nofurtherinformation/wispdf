@@ -1,6 +1,7 @@
 /**
  * CSV reader tests: property round-trips, RFC-4180 edge cases, dtype inference,
  * null handling, option variants, and malformed-input errors.
+ * v2.6: i64 promotion rule, explicit i64/date32/timestamp dtype parsing.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -8,6 +9,7 @@ import fc from 'fast-check';
 import { fromCSV, ChunkParser } from '../../src/io/csv.js';
 import { init, type DfRuntime } from '../../src/frame/runtime.js';
 import { loadRuntimeForTest } from '../frame/helper.js';
+import { civilToDays } from '../../src/temporal/civil.js';
 
 let rt: DfRuntime;
 beforeAll(async () => {
@@ -345,6 +347,309 @@ describe('fromCSV — round-trip properties', () => {
               if (vals[i] === null) expect(out[i]).toBe(null);
               else expect(out[i]).toBeCloseTo(vals[i]!, 5);
             }
+          } finally {
+            df.dispose();
+          }
+        },
+      ),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fromCSV — i64 inference (ADR-009 v2.6 promotion rule)
+// ---------------------------------------------------------------------------
+
+describe('fromCSV — i64 inference (ADR-009)', () => {
+  it('value exceeding MAX_SAFE_INTEGER promotes column to i64', () => {
+    // 9_007_199_254_740_993 > Number.MAX_SAFE_INTEGER (9_007_199_254_740_991)
+    const df = fromCSV('x\n9007199254740993', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    const vals = df.toColumns()['x'] as bigint[];
+    expect(vals[0]).toBe(9_007_199_254_740_993n);
+    df.dispose();
+  });
+
+  it('negative value exceeding -MAX_SAFE_INTEGER promotes to i64', () => {
+    const df = fromCSV('x\n-9007199254740993', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    const vals = df.toColumns()['x'] as bigint[];
+    expect(vals[0]).toBe(-9_007_199_254_740_993n);
+    df.dispose();
+  });
+
+  it('i64 promotion is monotone — small ints stay i64 once promoted', () => {
+    // 1 is safe-integer, but the big value promotes the column to i64
+    const df = fromCSV('x\n1\n9007199254740993\n2', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    const vals = df.toColumns()['x'] as bigint[];
+    expect(vals[0]).toBe(1n);
+    expect(vals[1]).toBe(9_007_199_254_740_993n);
+    expect(vals[2]).toBe(2n);
+    df.dispose();
+  });
+
+  it('i64 column with nulls — nulls preserved', () => {
+    const df = fromCSV('x\n9007199254740993\nnull\n2', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    const vals = df.toColumns()['x'] as (bigint | null)[];
+    expect(vals[0]).toBe(9_007_199_254_740_993n);
+    expect(vals[1]).toBeNull();
+    expect(vals[2]).toBe(2n);
+    df.dispose();
+  });
+
+  it('i64 mixed with float demotes to f64', () => {
+    // Big integer followed by a float → f64 (precision may be lost but type is f64)
+    const df = fromCSV('x\n9007199254740993\n3.14', { runtime: rt });
+    expect(df.dtypes['x']).toBe('f64');
+    df.dispose();
+  });
+
+  it('INT64_MAX round-trips via inference', () => {
+    const df = fromCSV('x\n9223372036854775807', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    const vals = df.toColumns()['x'] as bigint[];
+    expect(vals[0]).toBe(9_223_372_036_854_775_807n);
+    df.dispose();
+  });
+
+  it('INT64_MIN round-trips via inference', () => {
+    const df = fromCSV('x\n-9223372036854775808', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    const vals = df.toColumns()['x'] as bigint[];
+    expect(vals[0]).toBe(-9_223_372_036_854_775_808n);
+    df.dispose();
+  });
+
+  it('safe-integer column stays i32 (does NOT promote)', () => {
+    // 2147483648 > i32 max but ≤ MAX_SAFE_INTEGER → f64 (existing behavior)
+    const df = fromCSV('x\n2147483648', { runtime: rt });
+    expect(df.dtypes['x']).toBe('f64'); // unchanged: promotes to f64, not i64
+    df.dispose();
+  });
+
+  it('i32 column stays i32 for small values', () => {
+    const df = fromCSV('x\n1\n2\n3', { runtime: rt });
+    expect(df.dtypes['x']).toBe('i32');
+    df.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fromCSV — explicit i64 dtype
+// ---------------------------------------------------------------------------
+
+describe('fromCSV — explicit i64 dtype', () => {
+  it('explicit i64 parses integer strings as BigInt', () => {
+    const df = fromCSV('x\n1\n-1\n0', { dtypes: { x: 'i64' }, runtime: rt });
+    expect(df.dtypes['x']).toBe('i64');
+    expect(df.toColumns()['x']).toEqual([1n, -1n, 0n]);
+    df.dispose();
+  });
+
+  it('explicit i64 with nulls', () => {
+    const df = fromCSV('x\n1\nnull\n3', { dtypes: { x: 'i64' }, runtime: rt });
+    expect(df.toColumns()['x']).toEqual([1n, null, 3n]);
+    df.dispose();
+  });
+
+  it('explicit i64 boundary values', () => {
+    const csv = 'x\n9223372036854775807\n-9223372036854775808\n0';
+    const df = fromCSV(csv, { dtypes: { x: 'i64' }, runtime: rt });
+    const vals = df.toColumns()['x'] as bigint[];
+    expect(vals[0]).toBe(9_223_372_036_854_775_807n);
+    expect(vals[1]).toBe(-9_223_372_036_854_775_808n);
+    df.dispose();
+  });
+
+  it('explicit i64 throws on non-integer string', () => {
+    expect(() => fromCSV('x\n3.14', { dtypes: { x: 'i64' }, runtime: rt })).toThrow(/i64/);
+  });
+
+  it('explicit i64 throws on non-numeric string', () => {
+    expect(() => fromCSV('x\nhello', { dtypes: { x: 'i64' }, runtime: rt })).toThrow(/i64/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fromCSV — explicit date32 dtype
+// ---------------------------------------------------------------------------
+
+describe('fromCSV — explicit date32 dtype', () => {
+  it('date32 parses yyyy-MM-dd as day count', () => {
+    const df = fromCSV('d\n1970-01-01\n1970-01-02\n1969-12-31', { dtypes: { d: 'date32' }, runtime: rt });
+    expect(df.dtypes['d']).toBe('date32');
+    const vals = df.toColumns()['d'] as number[];
+    expect(vals[0]).toBe(0);   // epoch day 0
+    expect(vals[1]).toBe(1);   // +1 day
+    expect(vals[2]).toBe(-1);  // -1 day (pre-epoch)
+    df.dispose();
+  });
+
+  it('date32 pre-1970 date (1969-01-01)', () => {
+    const df = fromCSV('d\n1969-01-01', { dtypes: { d: 'date32' }, runtime: rt });
+    const vals = df.toColumns()['d'] as number[];
+    expect(vals[0]).toBe(civilToDays(1969, 1, 1));
+    df.dispose();
+  });
+
+  it('date32 modern date (2024-03-15)', () => {
+    const df = fromCSV('d\n2024-03-15', { dtypes: { d: 'date32' }, runtime: rt });
+    const vals = df.toColumns()['d'] as number[];
+    expect(vals[0]).toBe(civilToDays(2024, 3, 15));
+    df.dispose();
+  });
+
+  it('date32 with nulls', () => {
+    const df = fromCSV('d\n1970-01-01\nnull\n1970-01-03', { dtypes: { d: 'date32' }, runtime: rt });
+    const vals = df.toColumns()['d'] as (number | null)[];
+    expect(vals[0]).toBe(0);
+    expect(vals[1]).toBeNull();
+    expect(vals[2]).toBe(2);
+    df.dispose();
+  });
+
+  it('date32 throws on non-date string', () => {
+    expect(() =>
+      fromCSV('d\nhello', { dtypes: { d: 'date32' }, runtime: rt }),
+    ).toThrow(/date32/);
+  });
+
+  it('date32 throws on timestamp string (with T)', () => {
+    expect(() =>
+      fromCSV('d\n2024-01-15T10:30:00Z', { dtypes: { d: 'date32' }, runtime: rt }),
+    ).toThrow(/date32/);
+  });
+
+  it('date32 throws on ambiguous numbers', () => {
+    expect(() =>
+      fromCSV('d\n20240115', { dtypes: { d: 'date32' }, runtime: rt }),
+    ).toThrow(/date32/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fromCSV — explicit timestamp dtype
+// ---------------------------------------------------------------------------
+
+describe('fromCSV — explicit timestamp dtype', () => {
+  it('timestamp parses ISO-8601 with Z (UTC)', () => {
+    const df = fromCSV('ts\n1970-01-01T00:00:00Z\n1970-01-02T00:00:00Z', { dtypes: { ts: 'timestamp' }, runtime: rt });
+    expect(df.dtypes['ts']).toBe('timestamp');
+    const vals = df.toColumns()['ts'] as bigint[];
+    expect(vals[0]).toBe(0n);
+    expect(vals[1]).toBe(86_400_000n);
+    df.dispose();
+  });
+
+  it('timestamp parses ISO-8601 with explicit offset', () => {
+    // 2024-01-01T01:00:00+01:00 = 2024-01-01T00:00:00Z
+    const df = fromCSV('ts\n2024-01-01T01:00:00+01:00', { dtypes: { ts: 'timestamp' }, runtime: rt });
+    const vals = df.toColumns()['ts'] as bigint[];
+    const expected = BigInt(Date.parse('2024-01-01T00:00:00Z'));
+    expect(vals[0]).toBe(expected);
+    df.dispose();
+  });
+
+  it('timestamp with nulls', () => {
+    const df = fromCSV('ts\n1970-01-01T00:00:00Z\nnull\n1970-01-02T00:00:00Z', { dtypes: { ts: 'timestamp' }, runtime: rt });
+    const vals = df.toColumns()['ts'] as (bigint | null)[];
+    expect(vals[0]).toBe(0n);
+    expect(vals[1]).toBeNull();
+    expect(vals[2]).toBe(86_400_000n);
+    df.dispose();
+  });
+
+  it('timestamp rejects ambiguous local-time string (no Z/offset)', () => {
+    expect(() =>
+      fromCSV('ts\n2024-01-15T10:30:00', { dtypes: { ts: 'timestamp' }, runtime: rt }),
+    ).toThrow(/timezone|Z|offset/i);
+  });
+
+  it('timestamp rejects date-only string (no time/tz)', () => {
+    expect(() =>
+      fromCSV('ts\n2024-01-15', { dtypes: { ts: 'timestamp' }, runtime: rt }),
+    ).toThrow(/timezone|Z|offset/i);
+  });
+
+  it('timestamp rejects non-ISO string', () => {
+    expect(() =>
+      fromCSV('ts\nhello', { dtypes: { ts: 'timestamp' }, runtime: rt }),
+    ).toThrow(/timezone|Z|offset|timestamp/i);
+  });
+
+  it('timestamp negative epoch (pre-1970 UTC)', () => {
+    const df = fromCSV('ts\n1969-12-31T23:59:59Z', { dtypes: { ts: 'timestamp' }, runtime: rt });
+    const vals = df.toColumns()['ts'] as bigint[];
+    expect(vals[0]).toBe(-1000n); // 1 second before epoch = -1000 ms
+    df.dispose();
+  });
+
+  it('timestamp with milliseconds in ISO string', () => {
+    const df = fromCSV('ts\n1970-01-01T00:00:00.500Z', { dtypes: { ts: 'timestamp' }, runtime: rt });
+    const vals = df.toColumns()['ts'] as bigint[];
+    expect(vals[0]).toBe(500n);
+    df.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fromCSV — i64 property tests
+// ---------------------------------------------------------------------------
+
+describe('fromCSV — i64 round-trip property tests', () => {
+  /** Escape a value for CSV output (simple reference implementation). */
+  function toCsvCell(v: unknown): string {
+    if (v === null || v === undefined) return '';
+    return String(v);
+  }
+
+  function toCsvText2(names: string[], rows: unknown[][]): string {
+    let out = names.join(',') + '\n';
+    for (const row of rows) out += row.map(toCsvCell).join(',') + '\n';
+    return out;
+  }
+
+  it('i64 round-trip (big integers, nulls preserved)', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.option(
+            fc.bigInt({ min: 9_007_199_254_740_992n, max: 9_223_372_036_854_775_807n }),
+            { nil: null },
+          ),
+          { minLength: 1, maxLength: 10 },
+        ).filter((vals) => vals.some((v) => v !== null)), // at least one non-null to trigger i64 inference
+        (vals) => {
+          const csv = toCsvText2(['v'], vals.map((x) => [x]));
+          const df = fromCSV(csv, { runtime: rt });
+          try {
+            expect(df.dtypes['v']).toBe('i64');
+            const out = df.toColumns()['v'] as (bigint | null)[];
+            expect(out).toEqual(vals);
+          } finally {
+            df.dispose();
+          }
+        },
+      ),
+    );
+  });
+
+  it('explicit i64 round-trip (any i64 values)', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.option(fc.bigInt({ min: -9_223_372_036_854_775_808n, max: 9_223_372_036_854_775_807n }), { nil: null }),
+          { minLength: 0, maxLength: 20 },
+        ),
+        (vals) => {
+          const csv = toCsvText2(['v'], vals.map((x) => [x]));
+          const df = fromCSV(csv, { dtypes: { v: 'i64' }, runtime: rt });
+          try {
+            expect(df.dtypes['v']).toBe('i64');
+            const out = df.toColumns()['v'] as (bigint | null)[];
+            expect(out).toEqual(vals);
           } finally {
             df.dispose();
           }
