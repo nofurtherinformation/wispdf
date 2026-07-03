@@ -3,44 +3,49 @@
     "rows": 85395,
     "warm": 3,
     "measure": 3,
-    "date": "2026-07-03T16:35:22.390Z",
-    "note": "CP.0 baseline — databonk vs Arquero census pipeline"
+    "date": "2026-07-03T17:20:30.407Z",
+    "note": "CP.3 — str.slice on dictionary values (census-perf workstream)"
   },
   "steps": {
     "init runtime": {
-      "databonk_ms": 1.26,
+      "databonk_ms": 1.28,
       "arquero_ms": null,
       "ratio": null
     },
     "load names": {
-      "databonk_ms": 105.26,
-      "arquero_ms": 0.09,
-      "ratio": 1169.593
+      "databonk_ms": 10.84,
+      "arquero_ms": 0.1,
+      "ratio": 108.248
     },
     "load pops(72c)": {
-      "databonk_ms": 162.1,
-      "arquero_ms": 0.3,
-      "ratio": 536.978
+      "databonk_ms": 5.18,
+      "arquero_ms": 0.32,
+      "ratio": 16.395
     },
     "join GEOID": {
-      "databonk_ms": 85.91,
-      "arquero_ms": 409.54,
-      "ratio": 0.21
+      "databonk_ms": 8.09,
+      "arquero_ms": 414.82,
+      "ratio": 0.02
     },
-    "derive state": {
-      "databonk_ms": 2.82,
-      "arquero_ms": 0.94,
-      "ratio": 3.006
+    "derive state(str)": {
+      "databonk_ms": 2.3,
+      "arquero_ms": 0.97,
+      "ratio": 2.383
+    },
+    "derive state(mapFn)": {
+      "databonk_ms": 3.04,
+      "arquero_ms": null,
+      "ratio": null
     },
     "groupby sum": {
-      "databonk_ms": 0.59,
-      "arquero_ms": 4.47,
+      "databonk_ms": 0.62,
+      "arquero_ms": 4.67,
       "ratio": 0.133
     },
     "TOTAL": {
-      "databonk_ms": 356.69,
-      "arquero_ms": 415.34,
-      "ratio": 0.859
+      "databonk_ms": 27.04,
+      "arquero_ms": 420.87,
+      "ratio": 0.064
     }
   }
 }
