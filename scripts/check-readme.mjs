@@ -106,6 +106,7 @@ const header = [
   'declare const dataPtr: number;',
   'declare const vpPtr: number;',
   'declare const len: number;',
+  'declare const bytes: Uint8Array;',
 ].join('\n');
 
 const fileContent = [header, '', ...cleanedBlocks, ''].join('\n');
@@ -133,6 +134,7 @@ const tsconfig = {
     paths: {
       wispdf: ['dist/index.d.ts'],
       'wispdf/workers': ['dist/workers.d.ts'],
+      'wispdf/parquet': ['dist/parquet.d.ts'],
     },
   },
   files: [tsFile],
