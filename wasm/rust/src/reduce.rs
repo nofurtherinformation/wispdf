@@ -789,3 +789,95 @@ impl_first!(first_i32_null, i32, 0i32);
 impl_last! (last_i32_null,  i32, 0i32);
 impl_first!(first_u32_null, u32, 0u32);
 impl_last! (last_u32_null,  u32, 0u32);
+
+// ========================================================================
+// § i64 reductions (v2.3) — wasm-abi.md §10
+// ========================================================================
+
+/// sum_i64: wrapping accumulator, returns i64 (not f64 like sum_i32/u32).
+#[no_mangle]
+pub unsafe extern "C" fn sum_i64_null(data: *const i64, vp: *const u8, len: i32) -> i64 {
+    let len = len as usize;
+    let mut acc: i64 = 0;
+    for i in 0..len {
+        if is_valid(vp, i) { acc = acc.wrapping_add(*data.add(i)); }
+    }
+    acc
+}
+
+/// mean_i64: convert each valid element i64→f64 FIRST, then 2-striped f64 sum.
+/// Returns NaN when all elements are null.
+#[no_mangle]
+pub unsafe extern "C" fn mean_i64_null(data: *const i64, vp: *const u8, len: i32) -> f64 {
+    let len = len as usize;
+    let n = count_valid(vp, len);
+    if n == 0 { return f64::NAN; }
+    let mut acc0 = 0.0f64;
+    let mut acc1 = 0.0f64;
+    let mut i = 0usize;
+    while i + 2 <= len {
+        if is_valid(vp, i)     { acc0 += *data.add(i)     as f64; }
+        if is_valid(vp, i + 1) { acc1 += *data.add(i + 1) as f64; }
+        i += 2;
+    }
+    if i < len && is_valid(vp, i) { acc0 += *data.add(i) as f64; }
+    (acc0 + acc1) / (n as f64)
+}
+
+impl_min_int!(min_i64_null, i64);
+impl_max_int!(max_i64_null, i64);
+
+/// var_i64: two-pass; i64→f64 per element; 2-striped pass 2.
+#[no_mangle]
+pub unsafe extern "C" fn var_i64_null(data: *const i64, vp: *const u8, len: i32) -> f64 {
+    let len = len as usize;
+    let n = count_valid(vp, len);
+    if n < 2 { return f64::NAN; }
+    // Pass 1: mean (reuse mean logic)
+    let mut a0 = 0.0f64; let mut a1 = 0.0f64;
+    let mut i = 0usize;
+    while i + 2 <= len {
+        if is_valid(vp, i)     { a0 += *data.add(i)     as f64; }
+        if is_valid(vp, i + 1) { a1 += *data.add(i + 1) as f64; }
+        i += 2;
+    }
+    if i < len && is_valid(vp, i) { a0 += *data.add(i) as f64; }
+    let mean = (a0 + a1) / (n as f64);
+    // Pass 2: sum of squared deviations (2-striped)
+    let mut s0 = 0.0f64; let mut s1 = 0.0f64;
+    let mut i = 0usize;
+    while i + 2 <= len {
+        if is_valid(vp, i)     { let d = *data.add(i)     as f64 - mean; s0 += d * d; }
+        if is_valid(vp, i + 1) { let d = *data.add(i + 1) as f64 - mean; s1 += d * d; }
+        i += 2;
+    }
+    if i < len && is_valid(vp, i) { let d = *data.add(i) as f64 - mean; s0 += d * d; }
+    (s0 + s1) / ((n - 1) as f64)
+}
+
+/// std_i64: sqrt(var_i64). Returns NaN when var is NaN.
+#[no_mangle]
+pub unsafe extern "C" fn std_i64_null(data: *const i64, vp: *const u8, len: i32) -> f64 {
+    sqrt_f64(var_i64_null(data, vp, len))
+}
+
+/// nunique_i64: O(n²) in-place dedup, capped at NUNIQUE_CAP.
+#[no_mangle]
+pub unsafe extern "C" fn nunique_i64_null(data: *const i64, vp: *const u8, len: i32) -> i32 {
+    let len = len as usize;
+    let mut buf = [0i64; NUNIQUE_CAP];
+    let mut cnt = 0usize;
+    for i in 0..len {
+        if !is_valid(vp, i) { continue; }
+        let v = *data.add(i);
+        let dup = buf[..cnt].contains(&v);
+        if !dup {
+            if cnt < NUNIQUE_CAP { buf[cnt] = v; }
+            cnt += 1;
+        }
+    }
+    cnt as i32
+}
+
+impl_first!(first_i64_null, i64, 0i64);
+impl_last! (last_i64_null,  i64, 0i64);

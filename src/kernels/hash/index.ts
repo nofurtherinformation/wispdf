@@ -41,6 +41,8 @@ export interface HashExports {
   hash_f64(data: number, vp: number, outHash: number, len: number): void;
   /** `hash_f32(data, vp, out_hash, len) -> ()` */
   hash_f32(data: number, vp: number, outHash: number, len: number): void;
+  /** `hash_i64(data, vp, out_hash, len) -> ()` — v2.3 i64 column hash. */
+  hash_i64(data: number, vp: number, outHash: number, len: number): void;
 
   // ── hash_combine ─────────────────────────────────────────────────────────
   /** `hash_combine(acc_hash, add_hash, len) -> ()` — in-place multi-key mix. */
