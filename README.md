@@ -1,9 +1,9 @@
-# skidi
+# wispdf
 
 Columnar dataframe library for JavaScript — pandas-familiar API, WebAssembly-accelerated kernels, zero-copy typed-array views, dual ESM/CJS, TypeScript types.
 
 ```
-npm install skidi
+npm install wispdf
 ```
 
 Works in **Node.js ≥ 18**, **Vite**, and **webpack** without configuration gymnastics.
@@ -11,10 +11,10 @@ Each `.wasm` binary is ≤ 19 KB gzipped; the JS entry is ≤ 23 KB gzipped.
 
 ---
 
-## Why skidi?
+## Why wispdf?
 
 Most JS "dataframe" libraries either wrap pandas in WASM (giant binary) or operate
-row-by-row over plain objects (slow).  skidi takes a different path:
+row-by-row over plain objects (slow).  wispdf takes a different path:
 
 - **Columns live in WASM linear memory.** JS holds zero-copy `TypedArray` views over
   those buffers — no marshalling overhead on the hot path.
@@ -41,7 +41,7 @@ The following are deferred to v2 or not planned:
 ## Install
 
 ```
-npm install skidi
+npm install wispdf
 ```
 
 Peer-required: **Node.js ≥ 18** (or a modern browser with WebAssembly support).
@@ -51,7 +51,7 @@ Peer-required: **Node.js ≥ 18** (or a modern browser with WebAssembly support)
 ## Quickstart
 
 ```typescript
-import { init, DataFrame, col } from 'skidi';
+import { init, DataFrame, col } from 'wispdf';
 
 // Load the wasm runtime once at startup (auto-detects SIMD)
 await init();
@@ -84,7 +84,7 @@ df.dispose();
 ### scope() — automatic cleanup
 
 ```typescript
-import { scope } from 'skidi';
+import { scope } from 'wispdf';
 
 const result = scope(() => {
   const filtered = df.filter(col('value').gt(5));
@@ -97,7 +97,7 @@ const result = scope(() => {
 ### I/O
 
 ```typescript
-import { init, DataFrame, fromCSV, fromArrow, toArrow, fromJSON, toJSON } from 'skidi';
+import { init, DataFrame, fromCSV, fromArrow, toArrow, fromJSON, toJSON } from 'wispdf';
 
 // Load the wasm runtime once at startup (needed for fromArrow)
 const rt = await init();
@@ -118,7 +118,7 @@ const json = toJSON(df3);
 
 ## Expression API vs lambda escape hatch
 
-skidi has two filter/map styles:
+wispdf has two filter/map styles:
 
 ### Expression path (fast — WASM-compiled)
 
@@ -158,14 +158,14 @@ Measured in **Docker (Debian bookworm), Node v22.23.1, Linux** (single thread, S
 Numbers are medians of 3 independent fresh runs at 1M rows.
 Source: [`bench/baselines/e2e-v1.json`](bench/baselines/e2e-v1.json).
 
-| Operation | skidi (ms) | Arquero (ms) | Ratio |
+| Operation | wispdf (ms) | Arquero (ms) | Ratio |
 |---|---:|---:|---:|
 | filter → groupby → sum (pipeline) | 12.3 | 45.3 | **3.7× faster** |
 | join (inner, string key) | 68.6 | 120.6 | **1.8× faster** |
 | sortValues (f64, 1M rows) | 145.3 | 248.9 | **1.7× faster** |
 
 > **Caveats:** Arquero times include `.objects()` materialisation (that's what its
-> pipeline naturally produces); skidi times do not materialise to JS objects.
+> pipeline naturally produces); wispdf times do not materialise to JS objects.
 > Results vary by machine, Node version, dataset shape, and JIT warm-up.
 > Run `node bench/e2e/pipeline.mjs` after `npm run build` to reproduce.
 
@@ -231,7 +231,7 @@ Requires `SharedArrayBuffer`. In Node ≥ 18 this is always available. In the
 browser you must enable cross-origin isolation (COOP/COEP headers).
 
 ```typescript
-import { enableThreads } from 'skidi/workers';
+import { enableThreads } from 'wispdf/workers';
 
 const th = await enableThreads({ workers: 4 });
 if (!th) throw new Error('threads unavailable — check COOP/COEP headers');

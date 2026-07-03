@@ -12,8 +12,8 @@
  *   2. Strips import lines, merges them by module (deduplicates re-exports of
  *      the same name across blocks), and wraps each block in its own async IIFE
  *      so variable names don't clash.
- *   3. Emits a single .ts file + a temporary tsconfig that maps 'skidi' →
- *      dist/index.d.ts and 'skidi/workers' → dist/workers.d.ts.
+ *   3. Emits a single .ts file + a temporary tsconfig that maps 'wispdf' →
+ *      dist/index.d.ts and 'wispdf/workers' → dist/workers.d.ts.
  *   4. Runs tsc --noEmit and exits 1 on type errors.
  */
 
@@ -48,7 +48,7 @@ console.log(`check-readme: found ${snippets.length} TypeScript snippet(s) in REA
 
 // ── 2. Collect imports (merged per module) and build per-block IIFEs ─────────
 //
-// Multiple snippets may import the same name from 'skidi'.  Collecting them all
+// Multiple snippets may import the same name from 'wispdf'.  Collecting them all
 // as-is produces duplicate identifiers.  We parse named imports per module and
 // emit a single merged import per module.
 //
@@ -102,7 +102,7 @@ const header = [
   '',
   '// Stubs for variables referenced across snippets without being declared in that snippet',
   'declare const csvText: string;',
-  'declare const df: import("skidi").DataFrame;',
+  'declare const df: import("wispdf").DataFrame;',
   'declare const dataPtr: number;',
   'declare const vpPtr: number;',
   'declare const len: number;',
@@ -115,7 +115,7 @@ writeFileSync(tsFile, fileContent);
 
 // ── 4. Emit a temporary tsconfig ─────────────────────────────────────────────
 //
-// moduleResolution: bundler + paths lets us resolve 'skidi' → dist/index.d.ts
+// moduleResolution: bundler + paths lets us resolve 'wispdf' → dist/index.d.ts
 // without installing the package as an npm dep.  baseUrl is the project root so
 // the paths are relative to it.
 
@@ -131,8 +131,8 @@ const tsconfig = {
     esModuleInterop: true,
     baseUrl: ROOT,
     paths: {
-      skidi: ['dist/index.d.ts'],
-      'skidi/workers': ['dist/workers.d.ts'],
+      wispdf: ['dist/index.d.ts'],
+      'wispdf/workers': ['dist/workers.d.ts'],
     },
   },
   files: [tsFile],

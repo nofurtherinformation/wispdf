@@ -22,7 +22,7 @@ existing behaviour is unaffected.
 ## Quick start
 
 ```typescript
-import { init, DataFrame, enableThreads } from 'skidi';
+import { init, DataFrame, enableThreads } from 'wispdf';
 
 await init(); // load the standard single-thread wasm
 
@@ -38,7 +38,7 @@ if (th) {
 ### Node.js script
 
 ```typescript
-import { enableThreads } from 'skidi';
+import { enableThreads } from 'wispdf';
 
 const th = await enableThreads({ workers: 4 });
 if (!th) throw new Error('threads unavailable');

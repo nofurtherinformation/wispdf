@@ -4,42 +4,42 @@
   "environment": "Docker (Debian GNU/Linux 12 bookworm) / Node v22.23.1 / Linux x86-64",
   "build": "SIMD",
   "rows": 1000000,
-  "note": "Medians of 3 independent fresh runs in Docker. Arquero times include .objects() materialisation. skidi times do not materialise to JS objects.",
+  "note": "Medians of 3 independent fresh runs in Docker. Arquero times include .objects() materialisation. wispdf times do not materialise to JS objects.",
   "runs": [
     {
       "run": 1,
-      "pipeline_skidi_ms": 12.29,
+      "pipeline_wispdf_ms": 12.29,
       "pipeline_arquero_ms": 45.44,
-      "join_skidi_ms": 68.99,
+      "join_wispdf_ms": 68.99,
       "join_arquero_ms": 120.61,
-      "sortValues_skidi_ms": 145.28,
+      "sortValues_wispdf_ms": 145.28,
       "sortValues_arquero_ms": 248.85
     },
     {
       "run": 2,
-      "pipeline_skidi_ms": 12.31,
+      "pipeline_wispdf_ms": 12.31,
       "pipeline_arquero_ms": 45.25,
-      "join_skidi_ms": 68.29,
+      "join_wispdf_ms": 68.29,
       "join_arquero_ms": 117.70,
-      "sortValues_skidi_ms": 144.67,
+      "sortValues_wispdf_ms": 144.67,
       "sortValues_arquero_ms": 245.47
     },
     {
       "run": 3,
-      "pipeline_skidi_ms": 12.18,
+      "pipeline_wispdf_ms": 12.18,
       "pipeline_arquero_ms": 45.20,
-      "join_skidi_ms": 68.64,
+      "join_wispdf_ms": 68.64,
       "join_arquero_ms": 123.39,
-      "sortValues_skidi_ms": 147.78,
+      "sortValues_wispdf_ms": 147.78,
       "sortValues_arquero_ms": 257.53
     }
   ],
   "medians": {
-    "pipeline_skidi_ms": 12.29,
+    "pipeline_wispdf_ms": 12.29,
     "pipeline_arquero_ms": 45.25,
-    "join_skidi_ms": 68.64,
+    "join_wispdf_ms": 68.64,
     "join_arquero_ms": 120.61,
-    "sortValues_skidi_ms": 145.28,
+    "sortValues_wispdf_ms": 145.28,
     "sortValues_arquero_ms": 248.85
   }
 }

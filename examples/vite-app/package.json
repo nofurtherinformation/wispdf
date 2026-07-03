@@ -1,8 +1,8 @@
 {
-  "name": "skidi-vite-app",
+  "name": "wispdf-vite-app",
   "version": "0.0.1",
   "private": true,
-  "description": "Minimal Vite app exercising skidi — 100K-row pipeline with table preview.",
+  "description": "Minimal Vite app exercising wispdf — 100K-row pipeline with table preview.",
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/copy-wasm.mjs",
@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "skidi": "file:../.."
+    "wispdf": "file:../.."
   },
   "devDependencies": {
     "vite": "^6.0.0"

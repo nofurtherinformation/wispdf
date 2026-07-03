@@ -1,5 +1,5 @@
 /**
- * Arrow IPC stream encode/decode for skidi DataFrames (ADR-002).
+ * Arrow IPC stream encode/decode for wispdf DataFrames (ADR-002).
  *
  * Our layout is Arrow-compatible by design:
  *   - Numeric columns: contiguous TypedArray → Arrow primitive buffer (zero-transform).

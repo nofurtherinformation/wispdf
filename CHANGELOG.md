@@ -6,7 +6,7 @@ All notable changes are documented here. Follows [Keep a Changelog](https://keep
 
 ## [0.1.0] — 2026-07-02
 
-First public release of **skidi** — a columnar WASM dataframe library for JavaScript.
+First public release of **wispdf** — a columnar WASM dataframe library for JavaScript.
 
 ### Phase 0 — Foundation & language spike
 
@@ -52,7 +52,7 @@ First public release of **skidi** — a columnar WASM dataframe library for Java
 ### Phase 5 — Parallel mode
 
 - `simd-threads.wasm` build (nightly Rust, `+atomics +bulk-memory`, imported `SharedArrayBuffer`-backed memory).
-- `enableThreads({ workers })` — exported from `skidi/workers` subpath entry (separate bundle to keep main entry under 25 KB gate).
+- `enableThreads({ workers })` — exported from `wispdf/workers` subpath entry (separate bundle to keep main entry under 25 KB gate).
 - Chunk dispatch: elementwise ops write directly into shared memory; reductions combine partial sums left-to-right (deterministic, non-bit-identical to single-thread for f64 — documented deviation).
 - Worker crash/timeout recovery: failed workers are terminated and respawned automatically.
 - Graceful no-op when `crossOriginIsolated` is absent (browser without COOP/COEP).
@@ -62,7 +62,7 @@ First public release of **skidi** — a columnar WASM dataframe library for Java
 
 - **I/O (Agent E):** CSV reader (type inference, streaming-friendly), JSON records (`fromJSON`/`toJSON`), Arrow IPC (`fromArrow`/`toArrow`) verified against `apache-arrow` (dev-only dep; no runtime dep).
 - **Release (Agent F — this release):**
-  - Package name `skidi`, version `0.1.0`, license MIT, `sideEffects: false`.
+  - Package name `wispdf`, version `0.1.0`, license MIT, `sideEffects: false`.
   - Exports map with split `import`/`require` + per-condition `.d.ts`/`.d.cts` types (attw-clean).
   - `README.md` with honest benchmark table, feature matrix, quickstart, bundler section.
   - `docs/bundlers.md` — Vite, webpack, Node, inline-base64 fallback.
@@ -88,4 +88,4 @@ First public release of **skidi** — a columnar WASM dataframe library for Java
 
 ---
 
-[0.1.0]: https://github.com/TODO/skidi/releases/tag/v0.1.0
+[0.1.0]: https://github.com/TODO/wispdf/releases/tag/v0.1.0

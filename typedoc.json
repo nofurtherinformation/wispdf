@@ -1,13 +1,13 @@
 {
   "entryPoints": ["src/index.ts"],
   "out": "docs/api",
-  "name": "skidi",
+  "name": "wispdf",
   "readme": "README.md",
   "includeVersion": true,
   "excludePrivate": true,
   "excludeInternal": true,
   "skipErrorChecking": true,
   "navigationLinks": {
-    "GitHub": "TODO: https://github.com/TODO/skidi"
+    "GitHub": "TODO: https://github.com/TODO/wispdf"
   }
 }

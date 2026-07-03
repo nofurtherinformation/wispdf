@@ -1,5 +1,5 @@
 {
-  "name": "skidi",
+  "name": "wispdf",
   "version": "0.1.0",
   "description": "Columnar WASM dataframe library for JavaScript — pandas-familiar ergonomics, WebAssembly-accelerated kernels, dual ESM/CJS, TypeScript types.",
   "keywords": [
@@ -18,7 +18,7 @@
   "author": "TODO: Dylan Halpern <dhalpern+rtc@g.uchicago.edu>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TODO/skidi.git"
+    "url": "git+https://github.com/TODO/wispdf.git"
   },
   "type": "module",
   "engines": {
@@ -72,7 +72,7 @@
     "bench": "node bench/run.mjs",
     "docs": "typedoc --options typedoc.json",
     "check:publint": "publint",
-    "check:attw": "attw skidi-0.1.0.tgz",
+    "check:attw": "attw wispdf-0.1.0.tgz",
     "prepack": "npm run build"
   },
   "devDependencies": {

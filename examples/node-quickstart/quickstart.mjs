@@ -1,5 +1,5 @@
 /**
- * skidi node-quickstart — mirrors the README quickstart exactly.
+ * wispdf node-quickstart — mirrors the README quickstart exactly.
  *
  * Exercises:
  *   fromColumns → filter (expression path) → groupby → agg → toRecords
@@ -12,7 +12,7 @@
  * (From the repo root in Docker: npm run build && cd examples/node-quickstart && npm install && node quickstart.mjs)
  */
 
-import { init, DataFrame, col, scope, fromCSV, fromArrow, toArrow, defaultRuntime } from 'skidi';
+import { init, DataFrame, col, scope, fromCSV, fromArrow, toArrow, defaultRuntime } from 'wispdf';
 
 // ── 1. Init ────────────────────────────────────────────────────────────────
 await init();
