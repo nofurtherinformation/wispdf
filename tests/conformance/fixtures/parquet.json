@@ -22,6 +22,23 @@
       } },
 
     { "group": "parquet_roundtrip_uncompressed",
+      "name": "parquet_roundtrip__f32",
+      "layer": "parquet_roundtrip",
+      "note": "f32 column maps to Parquet FLOAT physical type (ADR-011). f32 has 24-bit significand; values above 2^24 may round. Null survives definition-level round-trip.",
+      "frame": {
+        "columns": {
+          "v": { "dtype": "f32", "data": [0.0, 1.5, -2.5, null, 16777216.0] }
+        },
+        "nrows": 5
+      },
+      "write_opts": { "compression": "uncompressed" },
+      "expected": {
+        "columns": {
+          "v": { "dtype": "f32", "data": [0.0, 1.5, -2.5, null, 16777216.0] }
+        }
+      } },
+
+    { "group": "parquet_roundtrip_uncompressed",
       "name": "parquet_roundtrip__i32",
       "layer": "parquet_roundtrip",
       "note": "i32 column (Parquet INT32 physical). No nulls — tests all-valid path.",
