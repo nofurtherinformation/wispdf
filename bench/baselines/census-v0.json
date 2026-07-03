@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "rows": 85395,
+    "warm": 3,
+    "measure": 3,
+    "date": "2026-07-03T16:35:22.390Z",
+    "note": "CP.0 baseline — databonk vs Arquero census pipeline"
+  },
+  "steps": {
+    "init runtime": {
+      "databonk_ms": 1.26,
+      "arquero_ms": null,
+      "ratio": null
+    },
+    "load names": {
+      "databonk_ms": 105.26,
+      "arquero_ms": 0.09,
+      "ratio": 1169.593
+    },
+    "load pops(72c)": {
+      "databonk_ms": 162.1,
+      "arquero_ms": 0.3,
+      "ratio": 536.978
+    },
+    "join GEOID": {
+      "databonk_ms": 85.91,
+      "arquero_ms": 409.54,
+      "ratio": 0.21
+    },
+    "derive state": {
+      "databonk_ms": 2.82,
+      "arquero_ms": 0.94,
+      "ratio": 3.006
+    },
+    "groupby sum": {
+      "databonk_ms": 0.59,
+      "arquero_ms": 4.47,
+      "ratio": 0.133
+    },
+    "TOTAL": {
+      "databonk_ms": 356.69,
+      "arquero_ms": 415.34,
+      "ratio": 0.859
+    }
+  }
+}
